@@ -101,7 +101,7 @@ async function main() {
   // Modo cron (Railway): roda um scan e encerra o processo
   if (process.env.RUN_ONCE === 'true') {
     console.log('Elite Achados & Promo — modo cron.');
-    console.log(`   Desconto mínimo : ${DISCOUNT_THRESHOLD}%\n`);
+    console.log(`   Queda mínima  : ${DROP_THRESHOLD}% (último preço) | ${MIN_BEAT_THRESHOLD}% (mínimo histórico)\n`);
     await runScan();
     await closeBrowser();
     process.exit(0);
@@ -109,8 +109,8 @@ async function main() {
 
   // Modo contínuo (local com pm2)
   console.log('Elite Achados & Promo iniciado.');
-  console.log(`   Desconto mínimo : ${DISCOUNT_THRESHOLD}%`);
-  console.log(`   Intervalo       : ${INTERVAL_MS / 60000} min\n`);
+  console.log(`   Queda mínima  : ${DROP_THRESHOLD}% (último preço) | ${MIN_BEAT_THRESHOLD}% (mínimo histórico)`);
+  console.log(`   Intervalo     : ${INTERVAL_MS / 60000} min\n`);
 
   await runScan();
 
