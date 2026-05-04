@@ -24,29 +24,43 @@ async function sendPriceAlert({ name, url, store, currentPrice, lowestPrice, las
   const nameLabel  = escapeMarkdown(name);
   const pctLabel   = escapeMarkdown(discountPct.toFixed(1));
 
-  const caption = alertType === 'drop'
-    ? [
-        `📉 *QUEDA BRUSCA DE PREÇO — ${storeLabel}*`,
-        ``,
-        `📦 *${nameLabel}*`,
-        ``,
-        `💰 Preço atual: *${escapeMarkdown(formatPrice(currentPrice))}*`,
-        `⬇️ Preço anterior: ~${escapeMarkdown(formatPrice(lastPrice))}~`,
-        `🏷️ Queda de *${pctLabel}%* em relação ao último preço`,
-        ``,
-        `🛒 [Ver oferta](${url})`,
-      ].join('\n')
-    : [
-        `🏆 *NOVO MÍNIMO HISTÓRICO — ${storeLabel}*`,
-        ``,
-        `📦 *${nameLabel}*`,
-        ``,
-        `💰 Preço atual: *${escapeMarkdown(formatPrice(currentPrice))}*`,
-        `📉 Mínimo anterior: ~${escapeMarkdown(formatPrice(lowestPrice))}~`,
-        `🏷️ *${pctLabel}%* abaixo do menor preço já visto`,
-        ``,
-        `🛒 [Ver oferta](${url})`,
-      ].join('\n');
+  let caption;
+  if (alertType === 'min_beat') {
+    caption = [
+      `🏆 *NOVO MÍNIMO HISTÓRICO — ${storeLabel}*`,
+      ``,
+      `📦 *${nameLabel}*`,
+      ``,
+      `💰 Preço atual: *${escapeMarkdown(formatPrice(currentPrice))}*`,
+      `📉 Mínimo anterior: ~${escapeMarkdown(formatPrice(lowestPrice))}~`,
+      `🏷️ *${pctLabel}%* abaixo do menor preço já registrado`,
+      ``,
+      `🛒 [Ver oferta](${url})`,
+    ].join('\n');
+  } else if (alertType === 'min_hit') {
+    caption = [
+      `🎯 *MÍNIMO HISTÓRICO ATINGIDO — ${storeLabel}*`,
+      ``,
+      `📦 *${nameLabel}*`,
+      ``,
+      `💰 Preço atual: *${escapeMarkdown(formatPrice(currentPrice))}*`,
+      `📌 Igual ao menor preço já registrado`,
+      ``,
+      `🛒 [Ver oferta](${url})`,
+    ].join('\n');
+  } else {
+    caption = [
+      `📉 *QUEDA BRUSCA DE PREÇO — ${storeLabel}*`,
+      ``,
+      `📦 *${nameLabel}*`,
+      ``,
+      `💰 Preço atual: *${escapeMarkdown(formatPrice(currentPrice))}*`,
+      `⬇️ Preço anterior: ~${escapeMarkdown(formatPrice(lastPrice))}~`,
+      `🏷️ Queda de *${pctLabel}%* desde o último scan`,
+      ``,
+      `🛒 [Ver oferta](${url})`,
+    ].join('\n');
+  }
 
   try {
     if (imageUrl) {

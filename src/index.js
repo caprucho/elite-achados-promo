@@ -7,8 +7,8 @@ const { closeBrowser }   = require('./scrapers/browser');
 process.on('SIGINT',  () => closeBrowser().then(() => process.exit(0)));
 process.on('SIGTERM', () => closeBrowser().then(() => process.exit(0)));
 
-const DISCOUNT_THRESHOLD = parseFloat(process.env.DISCOUNT_THRESHOLD_PCT || '15');
-const DROP_THRESHOLD     = parseFloat(process.env.DROP_THRESHOLD_PCT    || '20');
+const DROP_THRESHOLD     = parseFloat(process.env.DROP_THRESHOLD_PCT    || '20'); // queda vs último preço
+const MIN_BEAT_THRESHOLD = parseFloat(process.env.MIN_BEAT_THRESHOLD_PCT || '5');  // % abaixo do mínimo histórico
 const INTERVAL_MS        = parseInt(process.env.SCAN_INTERVAL_MINUTES || '30', 10) * 60 * 1000;
 const REQUEST_DELAY_MS   = parseInt(process.env.REQUEST_DELAY_MS || '3000', 10);
 
@@ -35,21 +35,24 @@ async function processProduct(product) {
     return;
   }
 
-  // Condição 1: novo mínimo histórico com desconto >= DISCOUNT_THRESHOLD
-  const isNewMinimum = currentPrice < lowestPrice;
-  const discountFromMin = isNewMinimum
+  const discountFromMin = lowestPrice > 0
     ? ((lowestPrice - currentPrice) / lowestPrice) * 100
     : 0;
-  const alertMinimum = isNewMinimum && discountFromMin >= DISCOUNT_THRESHOLD;
-
-  // Condição 2: queda brusca >= DROP_THRESHOLD em relação ao último preço registrado
-  const isSharpDrop = lastPrice !== null && currentPrice < lastPrice;
-  const dropFromLast = isSharpDrop
+  const dropFromLast = lastPrice && lastPrice > 0
     ? ((lastPrice - currentPrice) / lastPrice) * 100
     : 0;
-  const alertDrop = isSharpDrop && dropFromLast >= DROP_THRESHOLD;
 
-  if (!alertMinimum && !alertDrop) return;
+  // Condição A: 5%+ abaixo do mínimo histórico (melhor preço visto)
+  const alertMinBeat = currentPrice < lowestPrice && discountFromMin >= MIN_BEAT_THRESHOLD;
+
+  // Condição B: atingiu exatamente o mínimo histórico (sem os 5%)
+  const alertMinHit = !alertMinBeat && currentPrice <= lowestPrice;
+
+  // Condição C: queda de 20%+ em relação ao último preço registrado
+  const alertDrop = !alertMinBeat && !alertMinHit
+    && lastPrice !== null && currentPrice < lastPrice && dropFromLast >= DROP_THRESHOLD;
+
+  if (!alertMinBeat && !alertMinHit && !alertDrop) return;
 
   const alreadySent = await wasAlertRecentlySent(id, currentPrice);
   if (alreadySent) {
@@ -57,10 +60,13 @@ async function processProduct(product) {
     return;
   }
 
-  // Prioridade: novo mínimo histórico > queda brusca
-  if (alertMinimum) {
-    await sendPriceAlert({ name, url, store, currentPrice, lowestPrice, discountPct: discountFromMin, imageUrl, alertType: 'minimum' });
+  // Prioridade: A > B > C — envia apenas um alerta por evento
+  if (alertMinBeat) {
+    await sendPriceAlert({ name, url, store, currentPrice, lowestPrice, discountPct: discountFromMin, imageUrl, alertType: 'min_beat' });
     await registerAlert(id, currentPrice, discountFromMin);
+  } else if (alertMinHit) {
+    await sendPriceAlert({ name, url, store, currentPrice, lowestPrice, discountPct: 0, imageUrl, alertType: 'min_hit' });
+    await registerAlert(id, currentPrice, 0);
   } else {
     await sendPriceAlert({ name, url, store, currentPrice, lastPrice, discountPct: dropFromLast, imageUrl, alertType: 'drop' });
     await registerAlert(id, currentPrice, dropFromLast);
