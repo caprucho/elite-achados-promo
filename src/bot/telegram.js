@@ -19,18 +19,34 @@ function escapeMarkdown(text) {
   return text.replace(/[_*[\]()~`>#+\-=|{}.!]/g, '\\$&');
 }
 
-async function sendPriceAlert({ name, url, store, currentPrice, lowestPrice, discountPct, imageUrl }) {
-  const caption = [
-    `🔥 *OFERTA DETECTADA — ${escapeMarkdown(store.toUpperCase())}*`,
-    ``,
-    `📦 *${escapeMarkdown(name)}*`,
-    ``,
-    `💰 Preço atual: *${escapeMarkdown(formatPrice(currentPrice))}*`,
-    `📉 Mínimo histórico: ~${escapeMarkdown(formatPrice(lowestPrice))}~`,
-    `🏷️ Desconto: *${escapeMarkdown(discountPct.toFixed(1))}% abaixo do menor preço*`,
-    ``,
-    `🛒 [Ver oferta](${url})`,
-  ].join('\n');
+async function sendPriceAlert({ name, url, store, currentPrice, lowestPrice, lastPrice, discountPct, imageUrl, alertType = 'minimum' }) {
+  const storeLabel = escapeMarkdown(store.toUpperCase());
+  const nameLabel  = escapeMarkdown(name);
+  const pctLabel   = escapeMarkdown(discountPct.toFixed(1));
+
+  const caption = alertType === 'drop'
+    ? [
+        `📉 *QUEDA BRUSCA DE PREÇO — ${storeLabel}*`,
+        ``,
+        `📦 *${nameLabel}*`,
+        ``,
+        `💰 Preço atual: *${escapeMarkdown(formatPrice(currentPrice))}*`,
+        `⬇️ Preço anterior: ~${escapeMarkdown(formatPrice(lastPrice))}~`,
+        `🏷️ Queda de *${pctLabel}%* em relação ao último preço`,
+        ``,
+        `🛒 [Ver oferta](${url})`,
+      ].join('\n')
+    : [
+        `🏆 *NOVO MÍNIMO HISTÓRICO — ${storeLabel}*`,
+        ``,
+        `📦 *${nameLabel}*`,
+        ``,
+        `💰 Preço atual: *${escapeMarkdown(formatPrice(currentPrice))}*`,
+        `📉 Mínimo anterior: ~${escapeMarkdown(formatPrice(lowestPrice))}~`,
+        `🏷️ *${pctLabel}%* abaixo do menor preço já visto`,
+        ``,
+        `🛒 [Ver oferta](${url})`,
+      ].join('\n');
 
   try {
     if (imageUrl) {

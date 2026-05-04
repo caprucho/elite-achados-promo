@@ -1,5 +1,5 @@
 require('dotenv').config();
-const { getActiveProducts, savePrice, getLowestPrice, wasAlertRecentlySent, registerAlert } = require('./db/queries');
+const { getActiveProducts, savePrice, getLowestPrice, getLastPrice, wasAlertRecentlySent, registerAlert } = require('./db/queries');
 const { getPrice }       = require('./scrapers');
 const { sendPriceAlert } = require('./bot/telegram');
 const { closeBrowser }   = require('./scrapers/browser');
@@ -7,7 +7,8 @@ const { closeBrowser }   = require('./scrapers/browser');
 process.on('SIGINT',  () => closeBrowser().then(() => process.exit(0)));
 process.on('SIGTERM', () => closeBrowser().then(() => process.exit(0)));
 
-const DISCOUNT_THRESHOLD = parseFloat(process.env.DISCOUNT_THRESHOLD_PCT || '10');
+const DISCOUNT_THRESHOLD = parseFloat(process.env.DISCOUNT_THRESHOLD_PCT || '15');
+const DROP_THRESHOLD     = parseFloat(process.env.DROP_THRESHOLD_PCT    || '20');
 const INTERVAL_MS        = parseInt(process.env.SCAN_INTERVAL_MINUTES || '30', 10) * 60 * 1000;
 const REQUEST_DELAY_MS   = parseInt(process.env.REQUEST_DELAY_MS || '3000', 10);
 
@@ -20,20 +21,35 @@ async function processProduct(product) {
   if (!result) return;
   const { price: currentPrice, imageUrl } = result;
 
+  // Busca histórico ANTES de salvar o preço atual
+  const [lastPrice, lowestPrice] = await Promise.all([
+    getLastPrice(id),
+    getLowestPrice(id),
+  ]);
+
   await savePrice(id, currentPrice);
 
-  const lowestPrice = await getLowestPrice(id);
-
-  // Produto novo: sem histórico anterior, apenas registra e segue
+  // Produto novo: sem histórico, apenas registra
   if (lowestPrice === null) {
     console.log(`[Monitor] Primeiro registro — ${name}: ${currentPrice}`);
     return;
   }
 
-  if (currentPrice >= lowestPrice) return;
+  // Condição 1: novo mínimo histórico com desconto >= DISCOUNT_THRESHOLD
+  const isNewMinimum = currentPrice < lowestPrice;
+  const discountFromMin = isNewMinimum
+    ? ((lowestPrice - currentPrice) / lowestPrice) * 100
+    : 0;
+  const alertMinimum = isNewMinimum && discountFromMin >= DISCOUNT_THRESHOLD;
 
-  const discountPct = ((lowestPrice - currentPrice) / lowestPrice) * 100;
-  if (discountPct < DISCOUNT_THRESHOLD) return;
+  // Condição 2: queda brusca >= DROP_THRESHOLD em relação ao último preço registrado
+  const isSharpDrop = lastPrice !== null && currentPrice < lastPrice;
+  const dropFromLast = isSharpDrop
+    ? ((lastPrice - currentPrice) / lastPrice) * 100
+    : 0;
+  const alertDrop = isSharpDrop && dropFromLast >= DROP_THRESHOLD;
+
+  if (!alertMinimum && !alertDrop) return;
 
   const alreadySent = await wasAlertRecentlySent(id, currentPrice);
   if (alreadySent) {
@@ -41,8 +57,14 @@ async function processProduct(product) {
     return;
   }
 
-  await sendPriceAlert({ name, url, store, currentPrice, lowestPrice, discountPct, imageUrl });
-  await registerAlert(id, currentPrice, discountPct);
+  // Prioridade: novo mínimo histórico > queda brusca
+  if (alertMinimum) {
+    await sendPriceAlert({ name, url, store, currentPrice, lowestPrice, discountPct: discountFromMin, imageUrl, alertType: 'minimum' });
+    await registerAlert(id, currentPrice, discountFromMin);
+  } else {
+    await sendPriceAlert({ name, url, store, currentPrice, lastPrice, discountPct: dropFromLast, imageUrl, alertType: 'drop' });
+    await registerAlert(id, currentPrice, dropFromLast);
+  }
 }
 
 async function runScan() {

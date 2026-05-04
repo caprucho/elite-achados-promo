@@ -45,6 +45,24 @@ async function getLowestPrice(productId) {
   return data.price;
 }
 
+async function getLastPrice(productId) {
+  const { data, error } = await supabase
+    .from('price_history')
+    .select('price')
+    .eq('product_id', productId)
+    .eq('is_available', true)
+    .order('created_at', { ascending: false })
+    .limit(1)
+    .maybeSingle();
+
+  if (error) {
+    console.error(`[getLastPrice] Erro para produto ${productId}:`, error.message);
+    return null;
+  }
+
+  return data?.price ?? null;
+}
+
 async function wasAlertRecentlySent(productId, price, windowHours = 24) {
   const since = new Date(Date.now() - windowHours * 60 * 60 * 1000).toISOString();
 
@@ -78,6 +96,7 @@ module.exports = {
   getActiveProducts,
   savePrice,
   getLowestPrice,
+  getLastPrice,
   wasAlertRecentlySent,
   registerAlert,
 };
