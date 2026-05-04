@@ -1,5 +1,5 @@
 require('dotenv').config();
-const { getActiveProducts, savePrice, getLowestPrice, getLastPrice, wasAlertRecentlySent, registerAlert } = require('./db/queries');
+const { getActiveProducts, savePrice, getLowestPrice, getLastPrice, wasAlertRecentlySent, registerAlert, getPriceHistory, saveUnavailable, getConsecutiveUnavailableCount } = require('./db/queries');
 const { getPrice }       = require('./scrapers');
 const { sendPriceAlert } = require('./bot/telegram');
 const { closeBrowser }   = require('./scrapers/browser');
@@ -7,10 +7,11 @@ const { closeBrowser }   = require('./scrapers/browser');
 process.on('SIGINT',  () => closeBrowser().then(() => process.exit(0)));
 process.on('SIGTERM', () => closeBrowser().then(() => process.exit(0)));
 
-const DROP_THRESHOLD     = parseFloat(process.env.DROP_THRESHOLD_PCT    || '20'); // queda vs último preço
-const MIN_BEAT_THRESHOLD = parseFloat(process.env.MIN_BEAT_THRESHOLD_PCT || '5');  // % abaixo do mínimo histórico
-const INTERVAL_MS        = parseInt(process.env.SCAN_INTERVAL_MINUTES || '30', 10) * 60 * 1000;
-const REQUEST_DELAY_MS   = parseInt(process.env.REQUEST_DELAY_MS || '3000', 10);
+const DROP_THRESHOLD        = parseFloat(process.env.DROP_THRESHOLD_PCT    || '20'); // queda vs último preço
+const MIN_BEAT_THRESHOLD    = parseFloat(process.env.MIN_BEAT_THRESHOLD_PCT || '5');  // % abaixo do mínimo histórico
+const UNAVAILABLE_THRESHOLD = parseInt(process.env.UNAVAILABLE_THRESHOLD   || '3', 10); // scans consecutivos sem resposta
+const INTERVAL_MS           = parseInt(process.env.SCAN_INTERVAL_MINUTES   || '30', 10) * 60 * 1000;
+const REQUEST_DELAY_MS      = parseInt(process.env.REQUEST_DELAY_MS        || '3000', 10);
 
 const sleep = (ms) => new Promise((res) => setTimeout(res, ms));
 
@@ -18,16 +19,44 @@ async function processProduct(product) {
   const { id, name, url, store } = product;
 
   const result = await getPrice(url);
-  if (!result) return;
+
+  if (!result) {
+    // Registra indisponibilidade e loga a contagem consecutiva
+    const prevCount = await getConsecutiveUnavailableCount(id);
+    await saveUnavailable(id);
+    if (prevCount === 0) {
+      console.log(`[Monitor] Produto ficou indisponível — ${name}`);
+    } else {
+      console.log(`[Monitor] Produto continua indisponível (${prevCount + 1}x) — ${name}`);
+    }
+    return;
+  }
+
   const { price: currentPrice, imageUrl } = result;
 
+  // Verifica indisponibilidade consecutiva ANTES de salvar o preço atual
+  const unavailableCount = await getConsecutiveUnavailableCount(id);
+  const wasUnavailable = unavailableCount >= UNAVAILABLE_THRESHOLD;
+
   // Busca histórico ANTES de salvar o preço atual
-  const [lastPrice, lowestPrice] = await Promise.all([
+  const [lastPrice, lowestPrice, priceHistory] = await Promise.all([
     getLastPrice(id),
     getLowestPrice(id),
+    getPriceHistory(id),
   ]);
 
   await savePrice(id, currentPrice);
+
+  // Alerta de volta ao estoque (prioridade máxima)
+  if (wasUnavailable) {
+    const alreadySent = await wasAlertRecentlySent(id, currentPrice);
+    if (!alreadySent) {
+      console.log(`[Monitor] Produto voltou ao estoque — ${name}: ${currentPrice}`);
+      await sendPriceAlert({ name, url, store, currentPrice, lowestPrice, imageUrl, priceHistory, alertType: 'back_in_stock' });
+      await registerAlert(id, currentPrice, 0);
+    }
+    return;
+  }
 
   // Produto novo: sem histórico, apenas registra
   if (lowestPrice === null) {
@@ -66,13 +95,13 @@ async function processProduct(product) {
 
   // Prioridade: A > B > C — envia apenas um alerta por evento
   if (alertMinBeat) {
-    await sendPriceAlert({ name, url, store, currentPrice, lowestPrice, discountPct: discountFromMin, imageUrl, alertType: 'min_beat' });
+    await sendPriceAlert({ name, url, store, currentPrice, lowestPrice, discountPct: discountFromMin, imageUrl, priceHistory, alertType: 'min_beat' });
     await registerAlert(id, currentPrice, discountFromMin);
   } else if (alertMinHit) {
-    await sendPriceAlert({ name, url, store, currentPrice, lowestPrice, discountPct: 0, imageUrl, alertType: 'min_hit' });
+    await sendPriceAlert({ name, url, store, currentPrice, lowestPrice, discountPct: 0, imageUrl, priceHistory, alertType: 'min_hit' });
     await registerAlert(id, currentPrice, 0);
   } else {
-    await sendPriceAlert({ name, url, store, currentPrice, lastPrice, discountPct: dropFromLast, imageUrl, alertType: 'drop' });
+    await sendPriceAlert({ name, url, store, currentPrice, lastPrice, discountPct: dropFromLast, imageUrl, priceHistory, alertType: 'drop' });
     await registerAlert(id, currentPrice, dropFromLast);
   }
 }

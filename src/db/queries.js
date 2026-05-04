@@ -92,6 +92,70 @@ async function registerAlert(productId, price, discountPct) {
   }
 }
 
+async function getPriceHistory(productId, limit = 60) {
+  const { data, error } = await supabase
+    .from('price_history')
+    .select('price, created_at')
+    .eq('product_id', productId)
+    .eq('is_available', true)
+    .order('created_at', { ascending: true })
+    .limit(limit);
+
+  if (error) {
+    console.error(`[getPriceHistory] Erro para produto ${productId}:`, error.message);
+    return [];
+  }
+  return data || [];
+}
+
+async function saveUnavailable(productId) {
+  const { error } = await supabase
+    .from('price_history')
+    .insert({ product_id: productId, price: 0, is_available: false });
+
+  if (error) {
+    console.error(`[saveUnavailable] Erro para produto ${productId}:`, error.message);
+  }
+}
+
+async function getConsecutiveUnavailableCount(productId) {
+  const { data, error } = await supabase
+    .from('price_history')
+    .select('is_available')
+    .eq('product_id', productId)
+    .order('created_at', { ascending: false })
+    .limit(10);
+
+  if (error || !data) return 0;
+
+  let count = 0;
+  for (const entry of data) {
+    if (!entry.is_available) count++;
+    else break;
+  }
+  return count;
+}
+
+async function addProduct(name, url, store) {
+  const { data, error } = await supabase
+    .from('products')
+    .insert({ name, url, store, active: true })
+    .select('id')
+    .single();
+
+  if (error) throw new Error(error.message);
+  return data.id;
+}
+
+async function deactivateProduct(productId) {
+  const { error } = await supabase
+    .from('products')
+    .update({ active: false })
+    .eq('id', productId);
+
+  if (error) throw new Error(error.message);
+}
+
 module.exports = {
   getActiveProducts,
   savePrice,
@@ -99,4 +163,9 @@ module.exports = {
   getLastPrice,
   wasAlertRecentlySent,
   registerAlert,
+  getPriceHistory,
+  saveUnavailable,
+  getConsecutiveUnavailableCount,
+  addProduct,
+  deactivateProduct,
 };

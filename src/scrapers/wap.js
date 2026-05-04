@@ -26,6 +26,7 @@ async function scrape(url) {
       .find((raw) => raw && raw.includes('"offers"'));
 
     let imageUrl = $('meta[property="og:image"]').attr('content') || null;
+    let name = $('meta[property="og:title"]').attr('content') || $('title').text().trim() || null;
 
     if (jsonLdRaw) {
       try {
@@ -35,9 +36,10 @@ async function scrape(url) {
           const img = jsonLd?.image;
           imageUrl = Array.isArray(img) ? img[0] : (img || null);
         }
+        if (!name && jsonLd?.name) name = jsonLd.name;
         if (offerPrice !== undefined) {
           const price = parseFloat(String(offerPrice));
-          if (!isNaN(price)) return { price, imageUrl };
+          if (!isNaN(price)) return { price, imageUrl, name };
         }
       } catch {
         // JSON-LD malformado — tenta próxima estratégia
@@ -61,7 +63,7 @@ async function scrape(url) {
       console.warn('[WAP] Preço extraído não é um número válido:', raw);
     }
 
-    return price !== null ? { price, imageUrl } : null;
+    return price !== null ? { price, imageUrl, name } : null;
   } catch (err) {
     console.error('[WAP] Erro ao raspar:', err.message);
     return null;

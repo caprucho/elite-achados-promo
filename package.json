@@ -1,6 +1,7 @@
 {
   "scripts": {
     "start": "node src/index.js",
+    "commands": "node src/commands.js",
     "seed": "node scripts/seed.js",
     "add": "node scripts/addProduct.js"
   },

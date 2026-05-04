@@ -52,8 +52,10 @@ async function scrape(url) {
     }
 
     const imageUrl = await page.$eval('meta[property="og:image"]', (el) => el.getAttribute('content')).catch(() => null);
+    const name = await page.$eval('meta[property="og:title"]', (el) => el.getAttribute('content')).catch(() => null)
+      || await page.title().catch(() => null);
 
-    return { price, imageUrl };
+    return { price, imageUrl, name };
   } catch (err) {
     console.error('[Dafiti] Erro ao raspar:', err.message);
     return null;
