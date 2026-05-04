@@ -1,0 +1,17 @@
+{
+  "scripts": {
+    "start": "node src/index.js",
+    "seed": "node scripts/seed.js",
+    "add": "node scripts/addProduct.js"
+  },
+  "dependencies": {
+    "@supabase/supabase-js": "^2.105.3",
+    "axios": "^1.16.0",
+    "cheerio": "^1.2.0",
+    "dotenv": "^17.4.2",
+    "node-telegram-bot-api": "^0.67.0",
+    "puppeteer": "^24.42.0",
+    "puppeteer-extra": "^3.3.6",
+    "puppeteer-extra-plugin-stealth": "^2.11.2"
+  }
+}
