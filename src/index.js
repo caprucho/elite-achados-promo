@@ -66,13 +66,22 @@ async function runScan() {
 }
 
 async function main() {
+  // Modo cron (Railway): roda um scan e encerra o processo
+  if (process.env.RUN_ONCE === 'true') {
+    console.log('Elite Achados & Promo — modo cron.');
+    console.log(`   Desconto mínimo : ${DISCOUNT_THRESHOLD}%\n`);
+    await runScan();
+    await closeBrowser();
+    process.exit(0);
+  }
+
+  // Modo contínuo (local com pm2)
   console.log('Elite Achados & Promo iniciado.');
   console.log(`   Desconto mínimo : ${DISCOUNT_THRESHOLD}%`);
   console.log(`   Intervalo       : ${INTERVAL_MS / 60000} min\n`);
 
   await runScan();
 
-  // Agenda próxima varredura somente após a atual terminar — evita sobreposição
   const schedule = () => setTimeout(async () => {
     await runScan();
     schedule();
