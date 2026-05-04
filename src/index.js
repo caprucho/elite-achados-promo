@@ -45,8 +45,12 @@ async function processProduct(product) {
   // Condição A: 5%+ abaixo do mínimo histórico (melhor preço visto)
   const alertMinBeat = currentPrice < lowestPrice && discountFromMin >= MIN_BEAT_THRESHOLD;
 
-  // Condição B: atingiu exatamente o mínimo histórico (sem os 5%)
-  const alertMinHit = !alertMinBeat && currentPrice <= lowestPrice;
+  // Condição B: atingiu o mínimo histórico vindo de um preço mais alto
+  // lastPrice > lowestPrice garante que o preço caiu até o mínimo agora, não que já estava lá
+  const alertMinHit = !alertMinBeat
+    && currentPrice <= lowestPrice
+    && lastPrice !== null
+    && lastPrice > lowestPrice;
 
   // Condição C: queda de 20%+ em relação ao último preço registrado
   const alertDrop = !alertMinBeat && !alertMinHit
