@@ -155,12 +155,12 @@ async function sendPriceAlert({ name, url, store, category, currentPrice, lowest
     console.log(`[Telegram] Alerta enviado: ${name} — ${formatPrice(currentPrice)}`);
   } catch (err) {
     console.error('[Telegram] Erro ao enviar alerta:', err.message);
-    // fallback sem foto
     if (imageUrl) {
       await bot.sendMessage(TELEGRAM_CHANNEL_ID, caption, {
         parse_mode: 'MarkdownV2',
         disable_web_page_preview: false,
-      }).catch(() => {});
+      }).then(() => console.log(`[Telegram] Alerta enviado (sem foto): ${name} — ${formatPrice(currentPrice)}`))
+        .catch(() => {});
     }
   }
 
