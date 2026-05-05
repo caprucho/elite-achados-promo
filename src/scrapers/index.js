@@ -3,6 +3,7 @@ const amazon       = require('./amazon');
 const dafiti       = require('./dafiti');
 const kabum        = require('./kabum');
 const wap          = require('./wap');
+const netshoes     = require('./netshoes');
 
 const ROUTES = [
   { match: (h) => h.includes('mercadolivre.com'), scraper: mercadolivre },
@@ -10,6 +11,7 @@ const ROUTES = [
   { match: (h) => h.includes('dafiti.com'),        scraper: dafiti       },
   { match: (h) => h.includes('kabum.com'),         scraper: kabum        },
   { match: (h) => h.includes('wap.ind.br'),        scraper: wap          },
+  { match: (h) => h.includes('netshoes.com'),      scraper: netshoes     },
 ];
 
 async function getPrice(productUrl) {
