@@ -72,10 +72,24 @@ async function buildChartUrl(priceHistory) {
   }
 }
 
-async function sendPriceAlert({ name, url, store, currentPrice, lowestPrice, lastPrice, discountPct, imageUrl, priceHistory = [], alertType = 'minimum' }) {
-  const storeLabel = escapeMarkdown(store.toUpperCase());
-  const nameLabel  = escapeMarkdown(name);
-  const pctLabel   = escapeMarkdown((discountPct || 0).toFixed(1));
+const CATEGORY_LABELS = {
+  calcados:    '👟 Calçados',
+  vestuario:   '👕 Vestuário',
+  acessorios:  '💎 Acessórios',
+  hardware:    '🖥️ Hardware',
+  eletronicos: '⚡ Eletrônicos',
+  casa:        '🏠 Casa',
+  beleza:      '💄 Beleza',
+  esporte:     '⚽ Esporte',
+};
+
+async function sendPriceAlert({ name, url, store, category, currentPrice, lowestPrice, lastPrice, discountPct, imageUrl, priceHistory = [], alertType = 'minimum' }) {
+  const storeLabel    = escapeMarkdown(store.toUpperCase());
+  const nameLabel     = escapeMarkdown(name);
+  const pctLabel      = escapeMarkdown((discountPct || 0).toFixed(1));
+  const categoryLine  = category && CATEGORY_LABELS[category]
+    ? `\n🗂️ _${escapeMarkdown(CATEGORY_LABELS[category])}_`
+    : '';
 
   let caption;
   if (alertType === 'min_beat') {
@@ -88,7 +102,7 @@ async function sendPriceAlert({ name, url, store, currentPrice, lowestPrice, las
       `📉 Mínimo anterior: ~${escapeMarkdown(formatPrice(lowestPrice))}~`,
       `🏷️ *${pctLabel}%* abaixo do menor preço já registrado`,
       ``,
-      `🛒 [Ver oferta](${url})`,
+      `🛒 [Ver oferta](${url})${categoryLine}`,
     ].join('\n');
   } else if (alertType === 'min_hit') {
     caption = [
@@ -99,7 +113,7 @@ async function sendPriceAlert({ name, url, store, currentPrice, lowestPrice, las
       `💰 Preço atual: *${escapeMarkdown(formatPrice(currentPrice))}*`,
       `📌 Igual ao menor preço já registrado`,
       ``,
-      `🛒 [Ver oferta](${url})`,
+      `🛒 [Ver oferta](${url})${categoryLine}`,
     ].join('\n');
   } else if (alertType === 'back_in_stock') {
     const lines = [
@@ -110,7 +124,7 @@ async function sendPriceAlert({ name, url, store, currentPrice, lowestPrice, las
       `💰 Preço atual: *${escapeMarkdown(formatPrice(currentPrice))}*`,
     ];
     if (lowestPrice) lines.push(`📌 Mínimo histórico: ${escapeMarkdown(formatPrice(lowestPrice))}`);
-    lines.push(``, `🛒 [Ver oferta](${url})`);
+    lines.push(``, `🛒 [Ver oferta](${url})${categoryLine}`);
     caption = lines.join('\n');
   } else {
     caption = [
@@ -122,7 +136,7 @@ async function sendPriceAlert({ name, url, store, currentPrice, lowestPrice, las
       `⬇️ Preço anterior: ~${escapeMarkdown(formatPrice(lastPrice))}~`,
       `🏷️ Queda de *${pctLabel}%* desde o último scan`,
       ``,
-      `🛒 [Ver oferta](${url})`,
+      `🛒 [Ver oferta](${url})${categoryLine}`,
     ].join('\n');
   }
 

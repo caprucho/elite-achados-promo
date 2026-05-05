@@ -3,7 +3,8 @@
     "start": "node src/index.js",
     "commands": "node src/commands.js",
     "seed": "node scripts/seed.js",
-    "add": "node scripts/addProduct.js"
+    "add": "node scripts/addProduct.js",
+    "weekly": "node src/weekly.js"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.105.3",

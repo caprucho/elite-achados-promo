@@ -16,7 +16,7 @@ const REQUEST_DELAY_MS      = parseInt(process.env.REQUEST_DELAY_MS        || '3
 const sleep = (ms) => new Promise((res) => setTimeout(res, ms));
 
 async function processProduct(product) {
-  const { id, name, url, store } = product;
+  const { id, name, url, store, category } = product;
 
   const result = await getPrice(url);
 
@@ -52,7 +52,7 @@ async function processProduct(product) {
     const alreadySent = await wasAlertRecentlySent(id, currentPrice);
     if (!alreadySent) {
       console.log(`[Monitor] Produto voltou ao estoque — ${name}: ${currentPrice}`);
-      await sendPriceAlert({ name, url, store, currentPrice, lowestPrice, imageUrl, priceHistory, alertType: 'back_in_stock' });
+      await sendPriceAlert({ name, url, store, category, currentPrice, lowestPrice, imageUrl, priceHistory, alertType: 'back_in_stock' });
       await registerAlert(id, currentPrice, 0);
     }
     return;
@@ -95,13 +95,13 @@ async function processProduct(product) {
 
   // Prioridade: A > B > C — envia apenas um alerta por evento
   if (alertMinBeat) {
-    await sendPriceAlert({ name, url, store, currentPrice, lowestPrice, discountPct: discountFromMin, imageUrl, priceHistory, alertType: 'min_beat' });
+    await sendPriceAlert({ name, url, store, category, currentPrice, lowestPrice, discountPct: discountFromMin, imageUrl, priceHistory, alertType: 'min_beat' });
     await registerAlert(id, currentPrice, discountFromMin);
   } else if (alertMinHit) {
-    await sendPriceAlert({ name, url, store, currentPrice, lowestPrice, discountPct: 0, imageUrl, priceHistory, alertType: 'min_hit' });
+    await sendPriceAlert({ name, url, store, category, currentPrice, lowestPrice, discountPct: 0, imageUrl, priceHistory, alertType: 'min_hit' });
     await registerAlert(id, currentPrice, 0);
   } else {
-    await sendPriceAlert({ name, url, store, currentPrice, lastPrice, discountPct: dropFromLast, imageUrl, priceHistory, alertType: 'drop' });
+    await sendPriceAlert({ name, url, store, category, currentPrice, lastPrice, discountPct: dropFromLast, imageUrl, priceHistory, alertType: 'drop' });
     await registerAlert(id, currentPrice, dropFromLast);
   }
 }

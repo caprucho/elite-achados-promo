@@ -156,6 +156,45 @@ async function deactivateProduct(productId) {
   if (error) throw new Error(error.message);
 }
 
+async function getWeeklyTopDrops(limit = 5) {
+  const since = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString();
+
+  const [productsRes, historyRes] = await Promise.all([
+    supabase.from('products').select('id, name, url, store').eq('active', true),
+    supabase.from('price_history').select('product_id, price, created_at')
+      .eq('is_available', true)
+      .gte('created_at', since)
+      .order('created_at', { ascending: true }),
+  ]);
+
+  if (productsRes.error || historyRes.error) {
+    console.error('[getWeeklyTopDrops] Erro:', productsRes.error?.message || historyRes.error?.message);
+    return [];
+  }
+
+  const products = Object.fromEntries((productsRes.data || []).map((p) => [p.id, p]));
+
+  const byProduct = {};
+  for (const row of historyRes.data || []) {
+    if (!products[row.product_id]) continue;
+    if (!byProduct[row.product_id]) byProduct[row.product_id] = [];
+    byProduct[row.product_id].push(row.price);
+  }
+
+  const drops = [];
+  for (const [pid, prices] of Object.entries(byProduct)) {
+    if (prices.length < 2) continue;
+    const weekStartPrice = prices[0];
+    const currentPrice = prices[prices.length - 1];
+    if (weekStartPrice <= 0 || currentPrice >= weekStartPrice) continue;
+    const dropPct = (weekStartPrice - currentPrice) / weekStartPrice * 100;
+    drops.push({ product: products[pid], weekStartPrice, currentPrice, dropPct });
+  }
+
+  drops.sort((a, b) => b.dropPct - a.dropPct);
+  return drops.slice(0, limit);
+}
+
 module.exports = {
   getActiveProducts,
   savePrice,
@@ -168,4 +207,5 @@ module.exports = {
   getConsecutiveUnavailableCount,
   addProduct,
   deactivateProduct,
+  getWeeklyTopDrops,
 };
