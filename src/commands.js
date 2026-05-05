@@ -26,6 +26,7 @@ function detectStore(url) {
   if (h.includes('dafiti'))       return 'Dafiti';
   if (h.includes('kabum'))        return 'KaBuM';
   if (h.includes('wap'))          return 'WAP';
+  if (h.includes('netshoes'))     return 'Netshoes';
   return h;
 }
 
