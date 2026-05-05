@@ -42,33 +42,36 @@ async function scrapeViaApi(mlId) {
   const headers = token ? { Authorization: `Bearer ${token}` } : {};
 
   if (mlId.type === 'product') {
+    // Busca metadados do catálogo (nome e imagem)
     const { data: prod } = await axios.get(
       `https://api.mercadolibre.com/products/${mlId.id}`,
       { timeout: 10000, headers }
     );
-
     const name     = prod.name;
     const imageUrl = prod.pictures?.[0]?.url || null;
 
+    // buy_box_winner é o preço direto quando disponível
     if (prod.buy_box_winner?.price) {
       return { price: parseFloat(prod.buy_box_winner.price), name, imageUrl };
     }
 
-    const childId = prod.children_ids?.[0];
-    console.warn(`[ML DEBUG] ${mlId.id} token=${!!token} buy_box=${prod.buy_box_winner} children=[${prod.children_ids?.slice(0,2)}]`);
-    if (!childId) return null;
-
-    const { data: item } = await axios.get(
-      `https://api.mercadolibre.com/items/${childId}`,
+    // Fallback: busca itens associados ao catálogo via search API
+    const { data: search } = await axios.get(
+      `https://api.mercadolibre.com/sites/MLB/search?catalog_product_id=${mlId.id}&limit=1`,
       { timeout: 10000, headers }
     );
 
-    const price = item.price;
-    if (!price || isNaN(parseFloat(price))) return null;
-    return { price: parseFloat(price), name, imageUrl: imageUrl || item.thumbnail || null };
+    const firstItem = search.results?.[0];
+    if (!firstItem?.price) return null;
+
+    return {
+      price:    parseFloat(firstItem.price),
+      name:     name || firstItem.title,
+      imageUrl: imageUrl || firstItem.thumbnail || null,
+    };
   }
 
-  // Item direto
+  // Item direto (não catálogo)
   const { data: item } = await axios.get(
     `https://api.mercadolibre.com/items/${mlId.id}`,
     { timeout: 10000, headers }
