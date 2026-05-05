@@ -19,8 +19,8 @@ function extractMlId(url) {
 
 async function scrapeViaApi(mlId) {
   const endpoint = mlId.type === 'product'
-    ? `https://api.mercadolivre.com.br/products/${mlId.id}`
-    : `https://api.mercadolivre.com.br/items/${mlId.id}`;
+    ? `https://api.mercadolibre.com/products/${mlId.id}`
+    : `https://api.mercadolibre.com/items/${mlId.id}`;
 
   const { data } = await axios.get(endpoint, { timeout: 10000 });
 
