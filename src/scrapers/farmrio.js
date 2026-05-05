@@ -4,13 +4,20 @@ async function scrape(url) {
   let page;
   try {
     page = await newPage();
-    await page.goto(url, { waitUntil: 'networkidle2', timeout: 30000 });
+    await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 30000 });
+
+    // Aguarda o estado VTEX ser populado
+    await page.waitForFunction(
+      () => document.querySelectorAll('script[type="application/ld+json"]').length > 0
+        || window.__STATE__ != null,
+      { timeout: 15000 }
+    ).catch(() => {});
 
     const imageUrl = await page.$eval('meta[property="og:image"]', (el) => el.getAttribute('content')).catch(() => null);
     const name = await page.$eval('meta[property="og:title"]', (el) => el.getAttribute('content')).catch(() => null)
       || await page.title().catch(() => null);
 
-    // Estratégia 1: JSON-LD (VTEX expõe o preço aqui)
+    // Estratégia 1: JSON-LD (VTEX io expõe Product schema)
     const ldPrice = await page.evaluate(() => {
       const scripts = Array.from(document.querySelectorAll('script[type="application/ld+json"]'));
       for (const s of scripts) {
@@ -27,13 +34,29 @@ async function scrape(url) {
 
     if (ldPrice !== null && !isNaN(ldPrice)) return { price: ldPrice, imageUrl, name };
 
-    // Estratégia 2: seletores VTEX (fallback)
+    // Estratégia 2: __STATE__ global (VTEX io armazena produtos aqui)
+    const statePrice = await page.evaluate(() => {
+      try {
+        const state = window.__STATE__;
+        if (!state) return null;
+        for (const key of Object.keys(state)) {
+          const node = state[key];
+          if (node && node.__typename === 'Offer' && typeof node.price === 'number' && node.price > 0) {
+            return node.price;
+          }
+        }
+      } catch {}
+      return null;
+    });
+
+    if (statePrice !== null && !isNaN(statePrice)) return { price: statePrice, imageUrl, name };
+
+    // Estratégia 3: seletores VTEX (fallback)
     const raw = await page.evaluate(() => {
       const selectors = [
         '[class*="sellingPriceValue"]',
         '[class*="sellingPrice"]',
         '[class*="currencyContainer"]',
-        '[class*="price"]',
         '[itemprop="price"]',
       ];
       for (const sel of selectors) {
