@@ -10,7 +10,9 @@ process.on('SIGTERM', () => closeBrowser().then(() => process.exit(0)));
 const DROP_THRESHOLD        = parseFloat(process.env.DROP_THRESHOLD_PCT    || '20'); // queda vs último preço
 const MIN_BEAT_THRESHOLD    = parseFloat(process.env.MIN_BEAT_THRESHOLD_PCT || '5');  // % abaixo do mínimo histórico
 const UNAVAILABLE_THRESHOLD = parseInt(process.env.UNAVAILABLE_THRESHOLD   || '3', 10); // scans consecutivos sem resposta
-const SAFETY_DROP_PCT       = parseFloat(process.env.SAFETY_DROP_PCT       || '80'); // queda > X% = preço suspeito (descarta)
+const SAFETY_DROP_PCT       = parseFloat(process.env.SAFETY_DROP_PCT       || '80'); // queda > X% gatilha re-scrape de confirmação
+const RECHECK_DELAY_MS      = parseInt(process.env.RECHECK_DELAY_MS        || '15000', 10);
+const RECHECK_TOLERANCE_PCT = parseFloat(process.env.RECHECK_TOLERANCE_PCT || '5'); // diferença máx (%) entre 1ª e 2ª leitura
 const INTERVAL_MS           = parseInt(process.env.SCAN_INTERVAL_MINUTES   || '30', 10) * 60 * 1000;
 const REQUEST_DELAY_MS      = parseInt(process.env.REQUEST_DELAY_MS        || '3000', 10);
 
@@ -33,7 +35,7 @@ async function processProduct(product) {
     return;
   }
 
-  const { price: currentPrice, imageUrl } = result;
+  let { price: currentPrice, imageUrl } = result;
 
   // Verifica indisponibilidade consecutiva ANTES de salvar o preço atual
   const unavailableCount = await getConsecutiveUnavailableCount(id);
@@ -46,12 +48,30 @@ async function processProduct(product) {
     getPriceHistory(id),
   ]);
 
-  // Sanity check: queda > SAFETY_DROP_PCT vs último preço = scraping suspeito
-  // (ex: parser concatenou parcela com preço, ou página de indisponível)
+  // Sanity check: queda > SAFETY_DROP_PCT vs último preço = reconfirmar antes
+  // de aceitar. Se a 2ª leitura confirmar o mesmo preço (±tolerância), é
+  // ofertão real; se divergir ou falhar, descartamos como erro de scraping.
   if (lastPrice && lastPrice > 0 && currentPrice < lastPrice * (1 - SAFETY_DROP_PCT / 100)) {
-    console.warn(`[Monitor] Preço suspeito descartado — ${name}: ${currentPrice} (último: ${lastPrice})`);
-    await saveUnavailable(id);
-    return;
+    console.warn(`[Monitor] Queda suspeita (${name}: R$ ${currentPrice} vs R$ ${lastPrice}) — reconfirmando em ${RECHECK_DELAY_MS / 1000}s...`);
+    await sleep(RECHECK_DELAY_MS);
+    const recheck = await getPrice(url);
+
+    if (!recheck) {
+      console.warn(`[Monitor] Reconfirmação retornou null — descartado: ${name}`);
+      await saveUnavailable(id);
+      return;
+    }
+
+    const diffPct = Math.abs(recheck.price - currentPrice) / currentPrice * 100;
+    if (diffPct > RECHECK_TOLERANCE_PCT) {
+      console.warn(`[Monitor] Leituras inconsistentes (R$ ${currentPrice} vs R$ ${recheck.price}, diff ${diffPct.toFixed(1)}%) — descartado: ${name}`);
+      await saveUnavailable(id);
+      return;
+    }
+
+    console.log(`[Monitor] Queda confirmada por re-scrape — ${name}: R$ ${recheck.price}`);
+    currentPrice = recheck.price;
+    imageUrl     = recheck.imageUrl || imageUrl;
   }
 
   await savePrice(id, currentPrice);
