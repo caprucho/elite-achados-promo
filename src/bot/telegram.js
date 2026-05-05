@@ -20,8 +20,16 @@ function escapeMarkdown(text) {
   return text.replace(/[_*[\]()~`>#+\-=|{}.!]/g, '\\$&');
 }
 
+const CHART_MIN_CHANGES = parseInt(process.env.CHART_MIN_CHANGES || '15', 10);
+
 async function buildChartUrl(priceHistory) {
-  if (!priceHistory || priceHistory.length < 3) return null;
+  if (!priceHistory || priceHistory.length < 2) return null;
+
+  let changes = 0;
+  for (let i = 1; i < priceHistory.length; i++) {
+    if (priceHistory[i].price !== priceHistory[i - 1].price) changes++;
+  }
+  if (changes <= CHART_MIN_CHANGES) return null;
 
   const labels = priceHistory.map((p) => {
     const d = new Date(p.created_at);
