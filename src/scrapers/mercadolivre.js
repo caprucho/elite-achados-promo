@@ -1,6 +1,5 @@
 const axios = require('axios');
 
-// Token OAuth2 em memória (válido por 6h)
 let _token = null;
 let _tokenExpiry = 0;
 
@@ -21,7 +20,7 @@ async function getToken() {
   );
 
   _token = data.access_token;
-  _tokenExpiry = Date.now() + (data.expires_in - 300) * 1000; // renova 5 min antes
+  _tokenExpiry = Date.now() + (data.expires_in - 300) * 1000;
   return _token;
 }
 
@@ -42,22 +41,46 @@ async function scrapeViaApi(mlId) {
   const token = await getToken();
   const headers = token ? { Authorization: `Bearer ${token}` } : {};
 
-  const endpoint = mlId.type === 'product'
-    ? `https://api.mercadolibre.com/products/${mlId.id}`
-    : `https://api.mercadolibre.com/items/${mlId.id}`;
+  if (mlId.type === 'product') {
+    // Catálogo: busca metadados do produto e depois o preço no primeiro item filho
+    const { data: prod } = await axios.get(
+      `https://api.mercadolibre.com/products/${mlId.id}`,
+      { timeout: 10000, headers }
+    );
 
-  const { data } = await axios.get(endpoint, { timeout: 10000, headers });
+    const name     = prod.name;
+    const imageUrl = prod.pictures?.[0]?.url || null;
 
-  const price = mlId.type === 'product'
-    ? (data.buy_box_winner?.price ?? data.lowest_price)
-    : data.price;
-  const name     = mlId.type === 'product' ? data.name : data.title;
-  const imageUrl = data.pictures?.[0]?.url || data.thumbnail || null;
+    // buy_box_winner tem preço quando disponível
+    if (prod.buy_box_winner?.price) {
+      return { price: parseFloat(prod.buy_box_winner.price), name, imageUrl };
+    }
 
-  if (!price || isNaN(parseFloat(price))) {
-    console.warn(`[MercadoLivre] DEBUG ${mlId.id}: buy_box=${data.buy_box_winner?.price} lowest=${data.lowest_price} price=${data.price} keys=${Object.keys(data).join(',')}`);
-    return null;
+    // Fallback: buscar preço no primeiro anúncio filho (children_ids)
+    const childId = prod.children_ids?.[0];
+    if (!childId) return null;
+
+    const { data: item } = await axios.get(
+      `https://api.mercadolibre.com/items/${childId}`,
+      { timeout: 10000, headers }
+    );
+
+    const price = item.price;
+    if (!price || isNaN(parseFloat(price))) return null;
+    return { price: parseFloat(price), name, imageUrl: imageUrl || item.thumbnail || null };
   }
+
+  // Item direto
+  const { data: item } = await axios.get(
+    `https://api.mercadolibre.com/items/${mlId.id}`,
+    { timeout: 10000, headers }
+  );
+
+  const price    = item.price;
+  const name     = item.title;
+  const imageUrl = item.pictures?.[0]?.url || item.thumbnail || null;
+
+  if (!price || isNaN(parseFloat(price))) return null;
   return { price: parseFloat(price), name, imageUrl };
 }
 
