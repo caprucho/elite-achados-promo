@@ -54,7 +54,10 @@ async function scrapeViaApi(mlId) {
   const name     = mlId.type === 'product' ? data.name : data.title;
   const imageUrl = data.pictures?.[0]?.url || data.thumbnail || null;
 
-  if (!price || isNaN(parseFloat(price))) return null;
+  if (!price || isNaN(parseFloat(price))) {
+    console.warn(`[MercadoLivre] DEBUG ${mlId.id}: buy_box=${data.buy_box_winner?.price} lowest=${data.lowest_price} price=${data.price} keys=${Object.keys(data).join(',')}`);
+    return null;
+  }
   return { price: parseFloat(price), name, imageUrl };
 }
 
