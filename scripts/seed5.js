@@ -1,0 +1,60 @@
+require('dotenv').config();
+const { supabase } = require('../src/db/supabase');
+
+const PRODUCTS = [
+  // ── Farm Rio ──────────────────────────────────────────────────────────────────
+  { name: 'Kimono Estampado Floresta Doce',                          url: 'https://www.farmrio.com.br/kimono-estampado-floresta-doce-floresta-doce_off-white-340732-51443/p',                                                                                                                                                                                                store: 'farmrio',      category: 'vestuario',   active: true },
+  { name: 'Kimono Estampado Peixinhos',                              url: 'https://www.farmrio.com.br/kimono-estampado-peixinhos-est-peixinhos_preto-316560-42181/p',                                                                                                                                                                                                       store: 'farmrio',      category: 'vestuario',   active: true },
+  { name: 'Kimono Estampado Floral Beleza',                          url: 'https://www.farmrio.com.br/kimono-estampado-floral-beleza-est-floral-beleza_off-white-316409-42229/p',                                                                                                                                                                                           store: 'farmrio',      category: 'vestuario',   active: true },
+  { name: 'Kimono Estampado Kyoto',                                  url: 'https://www.farmrio.com.br/kimono-estampado-kyoto-kyoto_am-cevada-362695-56672/p',                                                                                                                                                                                                               store: 'farmrio',      category: 'vestuario',   active: true },
+  { name: 'Vestido Longo Estampado Paisagem Tropical',               url: 'https://www.farmrio.com.br/vestido-longo-estampado-paisagem-tropical-passagem-tropical_bege-seda-350141-53996/p',                                                                                                                                                                                store: 'farmrio',      category: 'vestuario',   active: true },
+  { name: 'Vestido Longo Estampado Milena',                          url: 'https://www.farmrio.com.br/vestido-longo-estampado-milena-milena_loc-medio_az-araguaia-360717-57267/p',                                                                                                                                                                                          store: 'farmrio',      category: 'vestuario',   active: true },
+
+  // ── Mercado Livre ─────────────────────────────────────────────────────────────
+  { name: 'Apple iPhone 16 Pro 128GB Titânio Branco',               url: 'https://www.mercadolivre.com.br/apple-iphone-16-pro-128-gb-titnio-branco/p/MLB40287849',                                                                                                                                                                                                         store: 'mercadolivre', category: 'eletronicos', active: true },
+  { name: 'Samsung Galaxy S25 5G 256GB Azul Marinho',               url: 'https://www.mercadolivre.com.br/samsung-galaxy-s25-5g-256gb-12gb-cmera-tripla-azul-marinho/p/MLB45502223',                                                                                                                                                                                       store: 'mercadolivre', category: 'eletronicos', active: true },
+  { name: 'Amazon Kindle Scribe 16GB com Caneta',                   url: 'https://www.mercadolivre.com.br/amazon-kindle-scribe-16gb-2024-cor-tungsten/p/MLB47093024',                                                                                                                                                                                                      store: 'mercadolivre', category: 'eletronicos', active: true },
+  { name: 'Câmera de Ação Insta360 X4 8K',                         url: 'https://www.mercadolivre.com.br/insta360-x4-8k-360-action-cmera-360-60fps-para-streaming-profissional-inteligncia-artificial-com-sensor-de-rastreamento-e-controle-de-gestos-prova-dagua-efeito-basto-de-selfie-invisivel/p/MLB36223181',                                                         store: 'mercadolivre', category: 'eletronicos', active: true },
+  { name: 'Dyson Airwrap Multiestilizador Kit Completo',            url: 'https://www.mercadolivre.com.br/dyson-airwrap-multiestilizador-de-cabelo-completo/p/MLB50522412',                                                                                                                                                                                                 store: 'mercadolivre', category: 'beleza',      active: true },
+  { name: 'Valve Steam Deck OLED 512GB',                            url: 'https://www.mercadolivre.com.br/steam-deck-oled-512gb/p/MLB27635201',                                                                                                                                                                                                                             store: 'mercadolivre', category: 'eletronicos', active: true },
+  { name: 'Fone Bose QuietComfort Ultra Preto',                     url: 'https://www.mercadolivre.com.br/fone-de-ouvido-over-ear-sem-fio-bose-quietcomfort-ultra-preto/p/MLB28467117',                                                                                                                                                                                     store: 'mercadolivre', category: 'eletronicos', active: true },
+  { name: 'Tablet Samsung Galaxy Tab S9 FE 5G 128GB',               url: 'https://www.mercadolivre.com.br/tablet-samsung-galaxy-tab-s9-fe-5g-128gb-6gb-ram-tela-imersiva-de-109-90hz-camera-traseira-de-8mp-cmera-frontal-de-12mp-ultra-wide-wifi-6-ip68-android-14-verde-claro/p/MLB28529805',                                                                            store: 'mercadolivre', category: 'eletronicos', active: true },
+  { name: 'Placa de Vídeo RTX 4060 Ti 16GB GDDR6',                 url: 'https://www.mercadolivre.com.br/placa-de-video-rtx-4060-ti-16gb-gddr6-128bits-ventus-3x-oc/p/MLB29715221',                                                                                                                                                                                       store: 'mercadolivre', category: 'hardware',    active: true },
+  { name: 'Processador AMD Ryzen 7 5700X 8-Core',                   url: 'https://www.mercadolivre.com.br/processador-amd-ryzen-7-5700x-oem-46ghz-8-nucleos-e-16-thed/p/MLB62338492',                                                                                                                                                                                     store: 'mercadolivre', category: 'hardware',    active: true },
+  { name: 'Mouse Gamer Logitech G PRO X Superlight 2 Branco',       url: 'https://www.mercadolivre.com.br/mouse-gamer-sem-fio-logitech-g-pro-x-superlight-2-branco/p/MLB28294852',                                                                                                                                                                                         store: 'mercadolivre', category: 'hardware',    active: true },
+
+  // ── KaBuM ─────────────────────────────────────────────────────────────────────
+  { name: 'Console Sony PlayStation 5 Digital Edition 825GB',       url: 'https://www.kabum.com.br/produto/989702/console-sony-playstation-5-ssd-825gb-controle-sem-fio-dualsense-2-jogos-digitais-edicao-digital',                                                                                                                                                         store: 'kabum',        category: 'eletronicos', active: true },
+  { name: 'Headset Gamer Razer BlackShark V2 X 7.1',                url: 'https://www.kabum.com.br/produto/183080/headset-gamer-razer-blackshark-v2-x-drivers-50mm-surround-7-1-3-5-mm-verde-rz04-03240600-r3u1',                                                                                                                                                          store: 'kabum',        category: 'hardware',    active: true },
+  { name: 'Monitor Gamer LG UltraGear 24" FHD 180Hz 1ms',          url: 'https://www.kabum.com.br/produto/614879/monitor-gamer-lg-ultragear-24-fhd-180hz-1ms-ips-dp-e-hdmi-hdr10-freesync-g-sync-24gs60f-b',                                                                                                                                                               store: 'kabum',        category: 'hardware',    active: true },
+  { name: 'Echo Dot 5ª Geração Amazon Alexa Branco',                url: 'https://www.kabum.com.br/produto/460472/echo-dot-5-geracao-amazon-com-alexa-smart-speaker-branco-b09b8xvsdp',                                                                                                                                                                                    store: 'kabum',        category: 'eletronicos', active: true },
+  { name: 'Cadeira Gamer Husky Gaming Snow',                        url: 'https://www.kabum.com.br/produto/92752/cadeira-gamer-husky-gaming-snow-preto-e-branco-cilindro-de-gas-classe-4-base-em-metal-roda-em-nylon-hsn-bw',                                                                                                                                               store: 'kabum',        category: 'casa',        active: true },
+
+  // ── Netshoes ──────────────────────────────────────────────────────────────────
+  { name: 'Tênis Adidas Runfalcon 3 Masculino Branco/Preto',        url: 'https://www.netshoes.com.br/p/tenis-adidas-runfalcon-3-masculino-branco+preto-FBA-6528-028',                                                                                                                                                                                                     store: 'netshoes',     category: 'calcados',    active: true },
+  { name: 'Tênis Hoka Clifton 9 Masculino Laranja',                 url: 'https://www.netshoes.com.br/p/tenis-hoka-clifton-9-masculino-laranja-AXF-0631-042',                                                                                                                                                                                                              store: 'netshoes',     category: 'calcados',    active: true },
+
+  // ── Dafiti ────────────────────────────────────────────────────────────────────
+  { name: 'Jaqueta Calvin Klein Masculina Puffer Waterproof Caqui', url: 'https://www.dafiti.com.br/Jaqueta-Calvin-Klein-Masculina-Puffer-Waterproof-Caqui-15166833.html',                                                                                                                                                                                                 store: 'dafiti',       category: 'vestuario',   active: true },
+  { name: 'Blusa de Moletom Aberta GAP Logo Marrom',                url: 'https://www.dafiti.com.br/Blusa-de-Moletom-Aberta-GAP-Logo-Marrom-11580219.html',                                                                                                                                                                                                                store: 'dafiti',       category: 'vestuario',   active: true },
+];
+
+async function main() {
+  console.log(`Inserindo ${PRODUCTS.length} produtos...`);
+
+  const { data, error } = await supabase
+    .from('products')
+    .upsert(PRODUCTS, { onConflict: 'url' })
+    .select('id, name');
+
+  if (error) {
+    console.error('Erro:', error.message);
+    process.exit(1);
+  }
+
+  console.log(`\n${data.length} produto(s) inseridos/atualizados:`);
+  data.forEach((p) => console.log(`  #${p.id} — ${p.name}`));
+  process.exit(0);
+}
+
+main();
