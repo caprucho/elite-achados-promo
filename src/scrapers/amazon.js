@@ -1,4 +1,5 @@
 const { newPage } = require('./browser');
+const { parsePriceBR } = require('../utils/parsePrice');
 
 async function scrape(url) {
   let page;
@@ -14,8 +15,8 @@ async function scrape(url) {
       return null;
     }
 
-    const price = parseFloat(raw.replace(/[^\d,]/g, '').replace(',', '.'));
-    if (isNaN(price)) {
+    const price = parsePriceBR(raw);
+    if (!price) {
       console.warn('[Amazon] Preço extraído não é um número válido:', raw);
       return null;
     }

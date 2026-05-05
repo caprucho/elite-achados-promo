@@ -1,5 +1,6 @@
 const axios = require('axios');
 const cheerio = require('cheerio');
+const { parsePriceBR } = require('../utils/parsePrice');
 
 const HEADERS = {
   'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
@@ -9,10 +10,7 @@ const HEADERS = {
 };
 
 function parsePrice(raw) {
-  // "R$ 3.299,00" ou "3299.00" → 3299.00
-  const cleaned = raw.replace(/[^\d,]/g, '').replace(',', '.');
-  const price = parseFloat(cleaned);
-  return isNaN(price) ? null : price;
+  return parsePriceBR(raw);
 }
 
 async function scrape(url) {

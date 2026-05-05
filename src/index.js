@@ -10,6 +10,7 @@ process.on('SIGTERM', () => closeBrowser().then(() => process.exit(0)));
 const DROP_THRESHOLD        = parseFloat(process.env.DROP_THRESHOLD_PCT    || '20'); // queda vs último preço
 const MIN_BEAT_THRESHOLD    = parseFloat(process.env.MIN_BEAT_THRESHOLD_PCT || '5');  // % abaixo do mínimo histórico
 const UNAVAILABLE_THRESHOLD = parseInt(process.env.UNAVAILABLE_THRESHOLD   || '3', 10); // scans consecutivos sem resposta
+const SAFETY_DROP_PCT       = parseFloat(process.env.SAFETY_DROP_PCT       || '80'); // queda > X% = preço suspeito (descarta)
 const INTERVAL_MS           = parseInt(process.env.SCAN_INTERVAL_MINUTES   || '30', 10) * 60 * 1000;
 const REQUEST_DELAY_MS      = parseInt(process.env.REQUEST_DELAY_MS        || '3000', 10);
 
@@ -44,6 +45,14 @@ async function processProduct(product) {
     getLowestPrice(id),
     getPriceHistory(id),
   ]);
+
+  // Sanity check: queda > SAFETY_DROP_PCT vs último preço = scraping suspeito
+  // (ex: parser concatenou parcela com preço, ou página de indisponível)
+  if (lastPrice && lastPrice > 0 && currentPrice < lastPrice * (1 - SAFETY_DROP_PCT / 100)) {
+    console.warn(`[Monitor] Preço suspeito descartado — ${name}: ${currentPrice} (último: ${lastPrice})`);
+    await saveUnavailable(id);
+    return;
+  }
 
   await savePrice(id, currentPrice);
 
