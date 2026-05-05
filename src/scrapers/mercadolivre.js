@@ -42,7 +42,6 @@ async function scrapeViaApi(mlId) {
   const headers = token ? { Authorization: `Bearer ${token}` } : {};
 
   if (mlId.type === 'product') {
-    // Catálogo: busca metadados do produto e depois o preço no primeiro item filho
     const { data: prod } = await axios.get(
       `https://api.mercadolibre.com/products/${mlId.id}`,
       { timeout: 10000, headers }
@@ -51,13 +50,12 @@ async function scrapeViaApi(mlId) {
     const name     = prod.name;
     const imageUrl = prod.pictures?.[0]?.url || null;
 
-    // buy_box_winner tem preço quando disponível
     if (prod.buy_box_winner?.price) {
       return { price: parseFloat(prod.buy_box_winner.price), name, imageUrl };
     }
 
-    // Fallback: buscar preço no primeiro anúncio filho (children_ids)
     const childId = prod.children_ids?.[0];
+    console.warn(`[ML DEBUG] ${mlId.id} token=${!!token} buy_box=${prod.buy_box_winner} children=[${prod.children_ids?.slice(0,2)}]`);
     if (!childId) return null;
 
     const { data: item } = await axios.get(
