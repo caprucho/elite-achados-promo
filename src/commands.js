@@ -27,6 +27,8 @@ function detectStore(url) {
   if (h.includes('kabum'))        return 'KaBuM';
   if (h.includes('wap'))          return 'WAP';
   if (h.includes('netshoes'))     return 'Netshoes';
+  if (h.includes('farmrio'))      return 'Farm Rio';
+  if (h === 'amzn.to')            return 'Amazon';
   return h;
 }
 
