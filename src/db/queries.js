@@ -15,6 +15,11 @@ async function getActiveProducts() {
 }
 
 async function savePrice(productId, price, isAvailable = true) {
+  if (typeof price !== 'number' || isNaN(price) || price <= 0) {
+    console.warn(`[savePrice] preço inválido recusado: ${price} para produto ${productId}`);
+    return;
+  }
+
   const { error } = await supabase
     .from('price_history')
     .insert({ product_id: productId, price, is_available: isAvailable });

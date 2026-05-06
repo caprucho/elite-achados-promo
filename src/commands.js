@@ -51,6 +51,15 @@ function detectStore(url) {
   return route || null;
 }
 
+function isLikelyProductUrl(url) {
+  let path;
+  try { path = new URL(url).pathname.toLowerCase() + new URL(url).search.toLowerCase(); }
+  catch { return false; }
+  // Rejeita URLs de busca/categoria (sinais comuns de não ser página de produto)
+  const blacklist = ['/busca', '/search', '/q=', '/categoria/', '/categories/', '/colecao/', '/collection/', '/genero/', '/marca/', '/brands/'];
+  return !blacklist.some((bad) => path.includes(bad));
+}
+
 function isAdmin(msg) {
   return TELEGRAM_ADMIN_USER_ID && String(msg.from.id) === String(TELEGRAM_ADMIN_USER_ID);
 }
@@ -204,6 +213,14 @@ bot.onText(/^\/addproduto\s+(.+)$/, async (msg, match) => {
     );
   }
 
+  // URL de página de produto (não busca/categoria)?
+  if (!isLikelyProductUrl(url)) {
+    return reply(msg,
+      `❌ Essa URL parece ser de busca, categoria ou listagem — preciso da URL específica de **um** produto.\n\n` +
+      `Abra o produto no site e copie o link da barra do navegador.`
+    );
+  }
+
   // Limite por usuário (admin/premium passa direto)
   if (!isPremium(msg)) {
     const [count, limit] = await Promise.all([
@@ -238,7 +255,16 @@ bot.onText(/^\/addproduto\s+(.+)$/, async (msg, match) => {
   }
 
   const { price, name: scrapedName } = result;
-  const name = scrapedName || `Produto (${route.label})`;
+
+  // Validações finais — defesa contra dados lixo
+  if (typeof price !== 'number' || isNaN(price) || price <= 0) {
+    return reply(msg, '❌ O preço retornado é inválido. Pode ser bug do scraper ou produto fora de venda. Tente outra URL.');
+  }
+  if (!scrapedName || scrapedName.length < 5) {
+    return reply(msg, '❌ Não consegui ler o nome do produto. URL pode ser de página errada (busca/categoria). Confirme se é a URL específica de um produto.');
+  }
+
+  const name = scrapedName;
 
   try {
     const id = await addProduct(name, url, route.store, {

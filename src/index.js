@@ -3,6 +3,7 @@ const { getActiveProducts, savePrice, getLowestPrice, getLastPrice, wasAlertRece
 const { getPrice }       = require('./scrapers');
 const { sendPriceAlert, sendAdminMessage } = require('./bot/telegram');
 const { closeBrowser }   = require('./scrapers/browser');
+const { notifyError, recordAlert, recordScan, recordProduct, scheduleDailySummary } = require('./utils/adminAlerts');
 
 // Auto-inicia o bot interativo (polling) no mesmo processo, exceto em modo cron
 // ou se explicitamente desligado. Set ENABLE_BOT_COMMANDS=false se rodar como
@@ -19,6 +20,21 @@ if (process.env.RUN_ONCE !== 'true' && process.env.ENABLE_BOT_COMMANDS !== 'fals
 process.on('SIGINT',  () => closeBrowser().then(() => process.exit(0)));
 process.on('SIGTERM', () => closeBrowser().then(() => process.exit(0)));
 
+// Last-resort: erros que escaparam do try-catch interno
+process.on('unhandledRejection', (reason) => {
+  const msg = reason instanceof Error ? reason.message : String(reason);
+  const stack = reason instanceof Error ? reason.stack : '';
+  console.error('[FATAL] unhandledRejection:', msg);
+  notifyError('unhandled_rejection', msg, stack).catch(() => {});
+});
+
+process.on('uncaughtException', (err) => {
+  console.error('[FATAL] uncaughtException:', err.message);
+  notifyError('uncaught_exception', err.message, err.stack).catch(() => {});
+  // Deixa o process morrer pra Railway reiniciar (estado pode ter ficado corrompido)
+  setTimeout(() => process.exit(1), 2000);
+});
+
 const DROP_THRESHOLD            = parseFloat(process.env.DROP_THRESHOLD_PCT      || '20'); // queda vs último preço
 const MIN_BEAT_THRESHOLD        = parseFloat(process.env.MIN_BEAT_THRESHOLD_PCT  || '5');  // % abaixo do mínimo histórico
 const MIN_CHANGES_FOR_HISTORIC  = parseInt(process.env.MIN_CHANGES_FOR_HISTORIC  || '5', 10); // mín. alterações de preço pra disparar min_beat/min_hit
@@ -31,11 +47,20 @@ const RECHECK_TOLERANCE_PCT     = parseFloat(process.env.RECHECK_TOLERANCE_PCT  
 const INTERVAL_MS               = parseInt(process.env.SCAN_INTERVAL_MINUTES     || '30', 10) * 60 * 1000;
 const REQUEST_DELAY_MS          = parseInt(process.env.REQUEST_DELAY_MS          || '3000', 10);
 
+// Conta mudanças significativas — ignora flutuações de centavos (oferta-do-dia
+// no ML mexe o preço em R$ 0,01 entre scans, inflando o contador).
+const PRICE_CHANGE_MIN_PCT = parseFloat(process.env.PRICE_CHANGE_MIN_PCT || '0.5'); // 0.5%
+const PRICE_CHANGE_MIN_ABS = parseFloat(process.env.PRICE_CHANGE_MIN_ABS || '1');   // R$ 1
 function countPriceChanges(history) {
   if (!history || history.length < 2) return 0;
   let n = 0;
   for (let i = 1; i < history.length; i++) {
-    if (history[i].price !== history[i - 1].price) n++;
+    const a = history[i - 1].price;
+    const b = history[i].price;
+    if (a === b) continue;
+    const absDiff = Math.abs(b - a);
+    const pctDiff = a > 0 ? (absDiff / a) * 100 : 100;
+    if (absDiff >= PRICE_CHANGE_MIN_ABS || pctDiff >= PRICE_CHANGE_MIN_PCT) n++;
   }
   return n;
 }
@@ -64,6 +89,8 @@ async function maybeNotifyLongUnavailable(product) {
   console.log(`[Monitor] Notificação admin enviada — ${name} indisponível há ${days.toFixed(1)}d`);
 }
 
+// Retorna: 'ok' (produto disponível), 'fail' (scrape retornou null),
+// 'skip' (em backoff, não foi tentado).
 async function processProduct(product) {
   const { id, name, url, store, category } = product;
 
@@ -75,16 +102,14 @@ async function processProduct(product) {
       ? (Date.now() - new Date(lastScanAt).getTime()) / 3600000
       : Infinity;
     if (hoursAgo < UNAVAILABLE_BACKOFF_HOURS) {
-      // Pula esse scan — mas ainda checa se atingiu 7 dias pra notificar
       await maybeNotifyLongUnavailable(product);
-      return;
+      return 'skip';
     }
   }
 
   const result = await getPrice(url);
 
   if (!result) {
-    // Registra indisponibilidade e loga
     await saveUnavailable(id);
     const newCount = prevUnavailableCount + 1;
     if (prevUnavailableCount === 0) {
@@ -92,10 +117,12 @@ async function processProduct(product) {
     } else {
       console.log(`[Monitor] Produto continua indisponível (${newCount}x) — ${name}`);
     }
-    // Pode ter atingido 7 dias agora
     await maybeNotifyLongUnavailable(product);
-    return;
+    recordProduct(false);
+    return 'fail';
   }
+
+  recordProduct(true);
 
   let { price: currentPrice, imageUrl } = result;
 
@@ -154,8 +181,9 @@ async function processProduct(product) {
         alertType: 'price_bug',
       });
       await registerAlert(id, currentPrice, dropPct);
+      recordAlert('price_bug');
     }
-    return;
+    return 'ok';
   }
 
   // Alerta de volta ao estoque — só se o produto JÁ ESTEVE disponível antes
@@ -169,18 +197,18 @@ async function processProduct(product) {
       console.log(`[Monitor] Produto voltou ao estoque — ${name}: ${currentPrice}`);
       await sendPriceAlert({ name, url, store, category, currentPrice, lowestPrice, imageUrl, priceHistory, alertType: 'back_in_stock' });
       await registerAlert(id, currentPrice, 0);
+      recordAlert('back_in_stock');
     }
-    return;
+    return 'ok';
   }
 
   // Produto novo OU produto que nunca teve preço válido: registra silenciosamente
   if (lowestPrice === null) {
     console.log(`[Monitor] Primeiro registro disponível — ${name}: ${currentPrice}`);
     if (wasUnavailable) {
-      // Limpa flag mesmo aqui (caso tivesse sido marcada por estar 7d sem dados)
       await clearUnavailableAlertSent(id);
     }
-    return;
+    return 'ok';
   }
 
   const discountFromMin = lowestPrice > 0
@@ -211,31 +239,46 @@ async function processProduct(product) {
   const alertDrop = !alertMinBeat && !alertMinHit
     && lastPrice !== null && currentPrice < lastPrice && dropFromLast >= DROP_THRESHOLD;
 
-  if (!alertMinBeat && !alertMinHit && !alertDrop) return;
+  if (!alertMinBeat && !alertMinHit && !alertDrop) return 'ok';
 
   const alreadySent = await wasAlertRecentlySent(id, currentPrice);
   if (alreadySent) {
     console.log(`[Monitor] Alerta já enviado recentemente — ${name}`);
-    return;
+    return 'ok';
   }
 
   // Prioridade: A > B > C — envia apenas um alerta por evento
   if (alertMinBeat) {
     await sendPriceAlert({ name, url, store, category, currentPrice, lowestPrice, discountPct: discountFromMin, imageUrl, priceHistory, alertType: 'min_beat' });
     await registerAlert(id, currentPrice, discountFromMin);
+    recordAlert('min_beat');
   } else if (alertMinHit) {
     await sendPriceAlert({ name, url, store, category, currentPrice, lowestPrice, discountPct: 0, imageUrl, priceHistory, alertType: 'min_hit' });
     await registerAlert(id, currentPrice, 0);
+    recordAlert('min_hit');
   } else {
     await sendPriceAlert({ name, url, store, category, currentPrice, lastPrice, discountPct: dropFromLast, imageUrl, priceHistory, alertType: 'drop' });
     await registerAlert(id, currentPrice, dropFromLast);
+    recordAlert('drop');
   }
+  return 'ok';
 }
+
+const STORE_FAIL_THRESHOLD_PCT = parseFloat(process.env.STORE_FAIL_THRESHOLD_PCT || '80');
+const STORE_FAIL_MIN_PRODUCTS  = parseInt(process.env.STORE_FAIL_MIN_PRODUCTS  || '3', 10);
 
 async function runScan() {
   console.log(`\n[Monitor] Iniciando varredura — ${new Date().toLocaleString('pt-BR')}`);
 
-  const products = await getActiveProducts();
+  let products;
+  try {
+    products = await getActiveProducts();
+  } catch (err) {
+    console.error('[Monitor] Erro ao buscar produtos:', err.message);
+    await notifyError('db_get_active_products', `Falha ao buscar produtos do Supabase: ${err.message}`, err.stack);
+    return;
+  }
+
   if (!products.length) {
     console.warn('[Monitor] Nenhum produto ativo encontrado.');
     return;
@@ -243,12 +286,43 @@ async function runScan() {
 
   console.log(`[Monitor] ${products.length} produto(s) para monitorar.`);
 
-  // Processa em série com delay para não levar ban por rate limiting
+  // Tracking por loja pra detectar massa de falhas
+  const storeStats = {};
+
+  // Processa em série com delay para não levar ban por rate limiting.
+  // Try-catch isolado: erro em um produto não derruba a varredura inteira.
   for (const product of products) {
-    await processProduct(product);
+    try {
+      const outcome = await processProduct(product);
+      if (outcome === 'ok' || outcome === 'fail') {
+        if (!storeStats[product.store]) storeStats[product.store] = { ok: 0, fail: 0 };
+        storeStats[product.store][outcome]++;
+      }
+    } catch (err) {
+      console.error(`[Monitor] Erro processando ${product.name}:`, err.message);
+      await notifyError(
+        'process_product',
+        `Falha ao processar *${product.name}* (${product.store})\n${err.message}`,
+        err.stack
+      );
+    }
     await sleep(REQUEST_DELAY_MS);
   }
 
+  // Alerta se uma loja inteira morreu nesse scan
+  for (const [store, { ok, fail }] of Object.entries(storeStats)) {
+    const total = ok + fail;
+    if (total < STORE_FAIL_MIN_PRODUCTS) continue;
+    const failPct = (fail / total) * 100;
+    if (failPct >= STORE_FAIL_THRESHOLD_PCT) {
+      await notifyError(
+        `store_mass_failure_${store}`,
+        `Loja *${store}* falhou em *${fail}/${total}* produtos (${failPct.toFixed(0)}%) nesse scan. Pode ser bloqueio novo, mudança de site, ou rede.`,
+      );
+    }
+  }
+
+  recordScan();
   console.log('[Monitor] Varredura concluída.');
 }
 
@@ -266,6 +340,9 @@ async function main() {
   console.log('Elite Achados & Promo iniciado.');
   console.log(`   Queda mínima  : ${DROP_THRESHOLD}% (último preço) | ${MIN_BEAT_THRESHOLD}% (mínimo histórico)`);
   console.log(`   Intervalo     : ${INTERVAL_MS / 60000} min\n`);
+
+  // Agenda resumo diário ao admin (DM com stats das últimas 24h)
+  scheduleDailySummary();
 
   await runScan();
 
