@@ -284,6 +284,41 @@ bot.on('polling_error', (err) => {
   console.warn('[Bot] polling error:', err.code || err.message);
 });
 
+// Registra a lista de comandos no Telegram (autocomplete ao digitar "/")
+const PUBLIC_COMMANDS = [
+  { command: 'addproduto',     description: 'Adicionar produto pra monitorar (link da loja)' },
+  { command: 'meusprodutos',   description: 'Ver meus produtos cadastrados' },
+  { command: 'removerproduto', description: 'Remover um produto seu (use o ID)' },
+  { command: 'sugerir',        description: 'Sugerir um produto pro canal' },
+  { command: 'lojas',          description: 'Ver lojas suportadas' },
+  { command: 'ajuda',          description: 'Como usar o bot' },
+];
+
+const ADMIN_COMMANDS = [
+  ...PUBLIC_COMMANDS,
+  { command: 'listarprodutos',    description: '[admin] Listar todos os produtos ativos' },
+  { command: 'sugestoes',         description: '[admin] Ver sugestões pendentes' },
+  { command: 'aprovarsugestao',   description: '[admin] Aprovar sugestão pelo ID' },
+  { command: 'rejeitarsugestao',  description: '[admin] Rejeitar sugestão pelo ID' },
+];
+
+(async () => {
+  try {
+    // Comandos públicos pra todos os usuários (scope default)
+    await bot.setMyCommands(PUBLIC_COMMANDS, { scope: { type: 'default' } });
+
+    // Comandos completos só pro admin (scope direcionado ao chat dele)
+    if (TELEGRAM_ADMIN_USER_ID) {
+      await bot.setMyCommands(ADMIN_COMMANDS, {
+        scope: { type: 'chat', chat_id: parseInt(TELEGRAM_ADMIN_USER_ID, 10) },
+      });
+    }
+    console.log('[Bot] Comandos registrados no Telegram.');
+  } catch (err) {
+    console.warn('[Bot] Falha ao registrar comandos:', err.message);
+  }
+})();
+
 console.log('Bot interativo iniciado.');
 console.log(`  Limite gratuito : ${FREE_USER_PRODUCT_LIMIT} produtos`);
 console.log(`  Premium IDs     : ${PREMIUM_IDS.length || '(nenhum)'}`);
