@@ -1,11 +1,7 @@
-// Scraper genérico para lojas que expõem preço via JSON-LD (Schema.org Product).
-// Funciona em VTEX, Shopify e a maioria dos e-commerces brasileiros que seguem
-// padrão Schema.org. Cobre 3 fallbacks na ordem:
-//   1. JSON-LD <script type="application/ld+json"> com Product/offers.price
-//   2. <meta itemprop="price" content="..."> (Sephora e similares)
-//   3. <meta property="product:price:amount" content="..."> (Open Graph product)
+// Scraper genérico para lojas que expõem dados via JSON-LD (Schema.org Product)
+// e/ou meta tags. Extrai preço, nome e imagem independentemente — o preço pode
+// vir de uma fonte (ex: meta itemprop) e a imagem de outra (ex: Product.image).
 const axios = require('axios');
-const { parsePriceBR } = require('../utils/parsePrice');
 
 const HEADERS = {
   'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
@@ -31,66 +27,78 @@ function findProduct(node) {
   return null;
 }
 
-function extractFromJsonLd(html) {
+function collectProducts(html) {
+  const found = [];
   const blocks = [...html.matchAll(/<script[^>]*type="application\/ld\+json"[^>]*>([\s\S]*?)<\/script>/gi)];
   for (const m of blocks) {
     try {
       const d = JSON.parse(m[1]);
       const candidates = Array.isArray(d) ? d : [d, ...(d['@graph'] || [])];
-
       for (const c of candidates) {
         const prod = findProduct(c);
-        if (!prod) continue;
-
-        const offers = Array.isArray(prod.offers) ? prod.offers[0] : prod.offers;
-        if (offers) {
-          const avail = String(offers.availability || '').toLowerCase();
-          if (avail.includes('outofstock') || avail.includes('discontinued')) {
-            return { unavailable: true };
-          }
-          const raw = offers.price ?? offers.lowPrice ?? offers.highPrice;
-          if (raw !== undefined && raw !== null) {
-            const price = parseFloat(String(raw).replace(',', '.'));
-            if (!isNaN(price) && price > 0) {
-              const rawImg = Array.isArray(prod.image) ? prod.image[0] : prod.image;
-              return {
-                price,
-                name:     prod.name || null,
-                imageUrl: typeof rawImg === 'string' ? rawImg : rawImg?.url || null,
-              };
-            }
-          }
-        }
+        if (prod) found.push(prod);
       }
     } catch {}
+  }
+  return found;
+}
+
+function isOutOfStock(prod) {
+  const offers = Array.isArray(prod.offers) ? prod.offers[0] : prod.offers;
+  const avail = String(offers?.availability || '').toLowerCase();
+  return avail.includes('outofstock') || avail.includes('discontinued');
+}
+
+function extractPriceFromProduct(prod) {
+  const offers = Array.isArray(prod.offers) ? prod.offers[0] : prod.offers;
+  if (!offers) return null;
+  const raw = offers.price ?? offers.lowPrice ?? offers.highPrice;
+  if (raw === undefined || raw === null) return null;
+  const price = parseFloat(String(raw).replace(',', '.'));
+  return !isNaN(price) && price > 0 ? price : null;
+}
+
+function extractPriceFromMeta(html) {
+  const itemprop = html.match(/<meta[^>]+itemprop=["']price["'][^>]+content=["']([^"']+)["']/i)?.[1]
+                ?? html.match(/<meta[^>]+content=["']([^"']+)["'][^>]+itemprop=["']price["']/i)?.[1];
+  if (itemprop) {
+    const p = parseFloat(String(itemprop).replace(',', '.'));
+    if (!isNaN(p) && p > 0) return p;
+  }
+  const og = html.match(/property=["']product:price:amount["']\s+content=["']([^"']+)["']/i)?.[1];
+  if (og) {
+    const p = parseFloat(String(og).replace(',', '.'));
+    if (!isNaN(p) && p > 0) return p;
   }
   return null;
 }
 
-function extractFromMeta(html) {
-  const ogImage = html.match(/property="og:image"\s+content="([^"]+)"/)?.[1] ?? null;
-  const ogTitle = html.match(/property="og:title"\s+content="([^"]+)"/)?.[1] ?? null;
+function extractImage(html, products) {
+  // 1. og:image (mais confiável)
+  const og = html.match(/property=["']og:image["']\s+content=["']([^"']+)["']/i)?.[1];
+  if (og) return og;
 
-  // <meta itemprop="price" content="323.0">
-  const itempropPrice = html.match(/<meta[^>]+itemprop=["']price["'][^>]+content=["']([^"']+)["']/i)?.[1]
-                     ?? html.match(/<meta[^>]+content=["']([^"']+)["'][^>]+itemprop=["']price["']/i)?.[1];
-  if (itempropPrice) {
-    const price = parseFloat(String(itempropPrice).replace(',', '.'));
-    if (!isNaN(price) && price > 0) {
-      return { price, name: ogTitle, imageUrl: ogImage };
-    }
+  // 2. Product.image do JSON-LD
+  for (const p of products) {
+    const img = Array.isArray(p.image) ? p.image[0] : p.image;
+    if (typeof img === 'string') return img;
+    if (img?.url) return img.url;
+    if (img?.contentUrl) return img.contentUrl;
   }
 
-  // Open Graph product:price:amount
-  const ogPrice = html.match(/property=["']product:price:amount["']\s+content=["']([^"']+)["']/i)?.[1];
-  if (ogPrice) {
-    const price = parseFloat(String(ogPrice).replace(',', '.'));
-    if (!isNaN(price) && price > 0) {
-      return { price, name: ogTitle, imageUrl: ogImage };
-    }
-  }
+  // 3. <meta itemprop="image">
+  const meta = html.match(/<meta[^>]+itemprop=["']image["'][^>]+content=["']([^"']+)["']/i)?.[1];
+  if (meta) return meta;
 
   return null;
+}
+
+function extractName(html, products) {
+  for (const p of products) {
+    if (p.name && typeof p.name === 'string') return p.name;
+  }
+  const og = html.match(/property=["']og:title["']\s+content=["']([^"']+)["']/i)?.[1];
+  return og || null;
 }
 
 async function scrape(url) {
@@ -107,20 +115,32 @@ async function scrape(url) {
     return null;
   }
 
-  // 1. JSON-LD
-  const ld = extractFromJsonLd(html);
-  if (ld?.unavailable) {
+  const products = collectProducts(html);
+
+  // Se algum Product está marcado como out of stock, considera indisponível
+  if (products.some(isOutOfStock)) {
     console.log('[jsonld] Produto fora de estoque:', url);
     return null;
   }
-  if (ld?.price) return ld;
 
-  // 2/3. Meta tags como fallback
-  const meta = extractFromMeta(html);
-  if (meta) return meta;
+  // Tenta preço via JSON-LD primeiro, depois meta tags
+  let price = null;
+  for (const p of products) {
+    price = extractPriceFromProduct(p);
+    if (price) break;
+  }
+  if (!price) price = extractPriceFromMeta(html);
 
-  console.warn('[jsonld] Preço não encontrado em:', url);
-  return null;
+  if (!price) {
+    console.warn('[jsonld] Preço não encontrado em:', url);
+    return null;
+  }
+
+  return {
+    price,
+    name:     extractName(html, products),
+    imageUrl: extractImage(html, products),
+  };
 }
 
 module.exports = { scrape };

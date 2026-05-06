@@ -21,6 +21,7 @@ process.on('SIGTERM', () => closeBrowser().then(() => process.exit(0)));
 
 const DROP_THRESHOLD            = parseFloat(process.env.DROP_THRESHOLD_PCT      || '20'); // queda vs último preço
 const MIN_BEAT_THRESHOLD        = parseFloat(process.env.MIN_BEAT_THRESHOLD_PCT  || '5');  // % abaixo do mínimo histórico
+const MIN_CHANGES_FOR_HISTORIC  = parseInt(process.env.MIN_CHANGES_FOR_HISTORIC  || '5', 10); // mín. alterações de preço pra disparar min_beat/min_hit
 const UNAVAILABLE_THRESHOLD     = parseInt(process.env.UNAVAILABLE_THRESHOLD     || '3', 10); // scans consecutivos sem resposta
 const UNAVAILABLE_BACKOFF_HOURS = parseFloat(process.env.UNAVAILABLE_BACKOFF_HOURS || '8');  // espera N horas entre scans de produto indisponível
 const UNAVAILABLE_NOTIFY_DAYS   = parseFloat(process.env.UNAVAILABLE_NOTIFY_DAYS   || '7');  // notifica admin se ficar indisponível por N dias
@@ -29,6 +30,15 @@ const RECHECK_DELAY_MS          = parseInt(process.env.RECHECK_DELAY_MS         
 const RECHECK_TOLERANCE_PCT     = parseFloat(process.env.RECHECK_TOLERANCE_PCT   || '5'); // diferença máx (%) entre 1ª e 2ª leitura
 const INTERVAL_MS               = parseInt(process.env.SCAN_INTERVAL_MINUTES     || '30', 10) * 60 * 1000;
 const REQUEST_DELAY_MS          = parseInt(process.env.REQUEST_DELAY_MS          || '3000', 10);
+
+function countPriceChanges(history) {
+  if (!history || history.length < 2) return 0;
+  let n = 0;
+  for (let i = 1; i < history.length; i++) {
+    if (history[i].price !== history[i - 1].price) n++;
+  }
+  return n;
+}
 
 const sleep = (ms) => new Promise((res) => setTimeout(res, ms));
 
@@ -148,8 +158,9 @@ async function processProduct(product) {
     return;
   }
 
-  // Alerta de volta ao estoque (prioridade máxima)
-  if (wasUnavailable) {
+  // Alerta de volta ao estoque — só se o produto JÁ ESTEVE disponível antes
+  // (lowestPrice !== null significa que existe pelo menos 1 registro de preço válido)
+  if (wasUnavailable && lowestPrice !== null) {
     // Produto voltou — limpa flag de notificação admin (caso 7d tivesse disparado)
     await clearUnavailableAlertSent(id);
 
@@ -162,9 +173,13 @@ async function processProduct(product) {
     return;
   }
 
-  // Produto novo: sem histórico, apenas registra
+  // Produto novo OU produto que nunca teve preço válido: registra silenciosamente
   if (lowestPrice === null) {
-    console.log(`[Monitor] Primeiro registro — ${name}: ${currentPrice}`);
+    console.log(`[Monitor] Primeiro registro disponível — ${name}: ${currentPrice}`);
+    if (wasUnavailable) {
+      // Limpa flag mesmo aqui (caso tivesse sido marcada por estar 7d sem dados)
+      await clearUnavailableAlertSent(id);
+    }
     return;
   }
 
@@ -175,12 +190,19 @@ async function processProduct(product) {
     ? ((lastPrice - currentPrice) / lastPrice) * 100
     : 0;
 
-  // Condição A: 5%+ abaixo do mínimo histórico (melhor preço visto)
-  const alertMinBeat = currentPrice < lowestPrice && discountFromMin >= MIN_BEAT_THRESHOLD;
+  // Histórico mínimo necessário pra alertas de "mínimo histórico" terem significado
+  const priceChanges = countPriceChanges(priceHistory);
+  const enoughHistory = priceChanges >= MIN_CHANGES_FOR_HISTORIC;
 
-  // Condição B: atingiu o mínimo histórico vindo de um preço mais alto
+  // Condição A: 5%+ abaixo do mínimo histórico (melhor preço visto) — exige histórico
+  const alertMinBeat = enoughHistory
+    && currentPrice < lowestPrice
+    && discountFromMin >= MIN_BEAT_THRESHOLD;
+
+  // Condição B: atingiu o mínimo histórico vindo de um preço mais alto — exige histórico
   // lastPrice > lowestPrice garante que o preço caiu até o mínimo agora, não que já estava lá
   const alertMinHit = !alertMinBeat
+    && enoughHistory
     && currentPrice <= lowestPrice
     && lastPrice !== null
     && lastPrice > lowestPrice;
