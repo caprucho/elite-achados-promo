@@ -267,18 +267,27 @@ bot.onText(/^\/addproduto\s+(.+)$/, async (msg, match) => {
   const name = scrapedName;
 
   try {
-    const id = await addProduct(name, url, route.store, {
+    const { id, status } = await addProduct(name, url, route.store, {
       addedByTelegramId: userId,
       addedByUsername: username,
     });
+
+    if (status === 'already_active') {
+      return reply(msg,
+        `ℹ️ Esse produto *já está sendo monitorado* (por você ou por outro usuário). ` +
+        `Você vai receber os alertas no canal.\n\n🆔 \`${id}\``
+      );
+    }
+
+    const header = status === 'reactivated'
+      ? `♻️ *Produto reativado!*`
+      : `✅ *Adicionado!*`;
+
     await reply(msg,
-      `✅ *Adicionado!*\n\n📦 ${name}\n🏪 ${route.label}\n💰 Preço atual: *${fmtPrice(price)}*\n\n` +
+      `${header}\n\n📦 ${name}\n🏪 ${route.label}\n💰 Preço atual: *${fmtPrice(price)}*\n\n` +
       `🆔 \`${id}\`\n\n_Vou alertar se baixar significativamente._`
     );
   } catch (err) {
-    if (err.message.includes('duplicate') || err.message.includes('unique')) {
-      return reply(msg, 'ℹ️ Esse produto já está sendo monitorado por alguém. Você vai receber os alertas no canal.');
-    }
     await reply(msg, `❌ Erro ao salvar: ${err.message}`);
   }
 });
@@ -342,7 +351,10 @@ bot.onText(/^\/sugerir\s+(.+)$/, async (msg, match) => {
   }
 
   try {
-    const id = await addSuggestion(userId, username, url, note);
+    const { id, status } = await addSuggestion(userId, username, url, note);
+    if (status === 'duplicate') {
+      return reply(msg, '⏳ Sua sugestão está em análise, será implementado em breve.');
+    }
     await reply(msg, `✅ Sugestão registrada!\n🆔 \`${id}\`\n\nVou avaliar e te aviso se for adicionada.`);
   } catch (err) {
     await reply(msg, `❌ Erro: ${err.message}`);

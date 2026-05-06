@@ -122,24 +122,19 @@ async function processProduct(product) {
     return 'fail';
   }
 
-  recordProduct(true);
-
   let { price: currentPrice, imageUrl } = result;
-
-  // Reusa a contagem já calculada no backoff
   const wasUnavailable = prevUnavailableCount >= UNAVAILABLE_THRESHOLD;
 
-  // Busca histórico ANTES de salvar o preço atual
   const [lastPrice, lowestPrice, priceHistory] = await Promise.all([
     getLastPrice(id),
     getLowestPrice(id),
     getPriceHistory(id),
   ]);
 
-  // Sanity check: queda > SAFETY_DROP_PCT vs último preço = reconfirmar antes
-  // de aceitar. Se a 2ª leitura confirmar o mesmo preço (±tolerância), é
-  // ofertão real / bug de preço; se divergir ou falhar, descartamos como erro
-  // de scraping.
+  // Sanity check: queda >SAFETY_DROP_PCT vs último preço = reconfirmar antes
+  // de aceitar. Se a 2ª leitura confirmar (±tolerância) → ofertão / bug real.
+  // Se divergir ou falhar → descarta como erro de scraping (retorna 'fail'
+  // pra contar no store-failure detector).
   let isPriceBug = false;
   if (lastPrice && lastPrice > 0 && currentPrice < lastPrice * (1 - SAFETY_DROP_PCT / 100)) {
     console.warn(`[Monitor] Queda suspeita (${name}: R$ ${currentPrice} vs R$ ${lastPrice}) — reconfirmando em ${RECHECK_DELAY_MS / 1000}s...`);
@@ -149,14 +144,16 @@ async function processProduct(product) {
     if (!recheck) {
       console.warn(`[Monitor] Reconfirmação retornou null — descartado: ${name}`);
       await saveUnavailable(id);
-      return;
+      recordProduct(false);
+      return 'fail';
     }
 
     const diffPct = Math.abs(recheck.price - currentPrice) / currentPrice * 100;
     if (diffPct > RECHECK_TOLERANCE_PCT) {
       console.warn(`[Monitor] Leituras inconsistentes (R$ ${currentPrice} vs R$ ${recheck.price}, diff ${diffPct.toFixed(1)}%) — descartado: ${name}`);
       await saveUnavailable(id);
-      return;
+      recordProduct(false);
+      return 'fail';
     }
 
     console.log(`[Monitor] 🐛 BUG DE PREÇO confirmado — ${name}: R$ ${recheck.price} (era R$ ${lastPrice})`);
@@ -165,102 +162,92 @@ async function processProduct(product) {
     isPriceBug = true;
   }
 
-  await savePrice(id, currentPrice);
+  // === Produto confirmadamente disponível daqui pra baixo ===
+  recordProduct(true);
 
-  // 🐛 BUG DE PREÇO — sobrepõe a lógica padrão (queda confirmada >SAFETY_DROP_PCT)
+  // === Decide alerta e envia (se aplicável). NÃO salva preço ainda. ===
+  // Cada send fica em try-catch isolado: alert falhar não impede savePrice
+  // (preserva histórico). Próximo scan re-tenta o alerta se a queda persistir.
   if (isPriceBug) {
     const alreadySent = await wasAlertRecentlySent(id, currentPrice);
     if (!alreadySent) {
       const dropPct = ((lastPrice - currentPrice) / lastPrice) * 100;
       console.log(`[Monitor] 🐛 Enviando alerta de BUG — ${name}: ${currentPrice}`);
-      await sendPriceAlert({
-        name, url, store, category,
-        currentPrice, lastPrice, lowestPrice,
-        discountPct: dropPct,
-        imageUrl, priceHistory,
-        alertType: 'price_bug',
-      });
-      await registerAlert(id, currentPrice, dropPct);
-      recordAlert('price_bug');
+      try {
+        await sendPriceAlert({
+          name, url, store, category,
+          currentPrice, lastPrice, lowestPrice,
+          discountPct: dropPct,
+          imageUrl, priceHistory,
+          alertType: 'price_bug',
+        });
+        await registerAlert(id, currentPrice, dropPct);
+        recordAlert('price_bug');
+      } catch (err) {
+        console.error(`[Monitor] Alerta de BUG falhou — ${name}:`, err.message);
+      }
     }
-    return 'ok';
-  }
-
-  // Alerta de volta ao estoque — só se o produto JÁ ESTEVE disponível antes
-  // (lowestPrice !== null significa que existe pelo menos 1 registro de preço válido)
-  if (wasUnavailable && lowestPrice !== null) {
-    // Produto voltou — limpa flag de notificação admin (caso 7d tivesse disparado)
+  } else if (wasUnavailable && lowestPrice !== null) {
     await clearUnavailableAlertSent(id);
-
     const alreadySent = await wasAlertRecentlySent(id, currentPrice);
     if (!alreadySent) {
       console.log(`[Monitor] Produto voltou ao estoque — ${name}: ${currentPrice}`);
-      await sendPriceAlert({ name, url, store, category, currentPrice, lowestPrice, imageUrl, priceHistory, alertType: 'back_in_stock' });
-      await registerAlert(id, currentPrice, 0);
-      recordAlert('back_in_stock');
+      try {
+        await sendPriceAlert({ name, url, store, category, currentPrice, lowestPrice, imageUrl, priceHistory, alertType: 'back_in_stock' });
+        await registerAlert(id, currentPrice, 0);
+        recordAlert('back_in_stock');
+      } catch (err) {
+        console.error(`[Monitor] Alerta back_in_stock falhou — ${name}:`, err.message);
+      }
     }
-    return 'ok';
-  }
-
-  // Produto novo OU produto que nunca teve preço válido: registra silenciosamente
-  if (lowestPrice === null) {
+  } else if (lowestPrice === null) {
     console.log(`[Monitor] Primeiro registro disponível — ${name}: ${currentPrice}`);
-    if (wasUnavailable) {
-      await clearUnavailableAlertSent(id);
-    }
-    return 'ok';
-  }
-
-  const discountFromMin = lowestPrice > 0
-    ? ((lowestPrice - currentPrice) / lowestPrice) * 100
-    : 0;
-  const dropFromLast = lastPrice && lastPrice > 0
-    ? ((lastPrice - currentPrice) / lastPrice) * 100
-    : 0;
-
-  // Histórico mínimo necessário pra alertas de "mínimo histórico" terem significado
-  const priceChanges = countPriceChanges(priceHistory);
-  const enoughHistory = priceChanges >= MIN_CHANGES_FOR_HISTORIC;
-
-  // Condição A: 5%+ abaixo do mínimo histórico (melhor preço visto) — exige histórico
-  const alertMinBeat = enoughHistory
-    && currentPrice < lowestPrice
-    && discountFromMin >= MIN_BEAT_THRESHOLD;
-
-  // Condição B: atingiu o mínimo histórico vindo de um preço mais alto — exige histórico
-  // lastPrice > lowestPrice garante que o preço caiu até o mínimo agora, não que já estava lá
-  const alertMinHit = !alertMinBeat
-    && enoughHistory
-    && currentPrice <= lowestPrice
-    && lastPrice !== null
-    && lastPrice > lowestPrice;
-
-  // Condição C: queda de 20%+ em relação ao último preço registrado
-  const alertDrop = !alertMinBeat && !alertMinHit
-    && lastPrice !== null && currentPrice < lastPrice && dropFromLast >= DROP_THRESHOLD;
-
-  if (!alertMinBeat && !alertMinHit && !alertDrop) return 'ok';
-
-  const alreadySent = await wasAlertRecentlySent(id, currentPrice);
-  if (alreadySent) {
-    console.log(`[Monitor] Alerta já enviado recentemente — ${name}`);
-    return 'ok';
-  }
-
-  // Prioridade: A > B > C — envia apenas um alerta por evento
-  if (alertMinBeat) {
-    await sendPriceAlert({ name, url, store, category, currentPrice, lowestPrice, discountPct: discountFromMin, imageUrl, priceHistory, alertType: 'min_beat' });
-    await registerAlert(id, currentPrice, discountFromMin);
-    recordAlert('min_beat');
-  } else if (alertMinHit) {
-    await sendPriceAlert({ name, url, store, category, currentPrice, lowestPrice, discountPct: 0, imageUrl, priceHistory, alertType: 'min_hit' });
-    await registerAlert(id, currentPrice, 0);
-    recordAlert('min_hit');
+    if (wasUnavailable) await clearUnavailableAlertSent(id);
   } else {
-    await sendPriceAlert({ name, url, store, category, currentPrice, lastPrice, discountPct: dropFromLast, imageUrl, priceHistory, alertType: 'drop' });
-    await registerAlert(id, currentPrice, dropFromLast);
-    recordAlert('drop');
+    const discountFromMin = lowestPrice > 0
+      ? ((lowestPrice - currentPrice) / lowestPrice) * 100
+      : 0;
+    const dropFromLast = lastPrice && lastPrice > 0
+      ? ((lastPrice - currentPrice) / lastPrice) * 100
+      : 0;
+
+    const priceChanges = countPriceChanges(priceHistory);
+    const enoughHistory = priceChanges >= MIN_CHANGES_FOR_HISTORIC;
+
+    const alertMinBeat = enoughHistory && currentPrice < lowestPrice && discountFromMin >= MIN_BEAT_THRESHOLD;
+    const alertMinHit  = !alertMinBeat && enoughHistory && currentPrice <= lowestPrice && lastPrice !== null && lastPrice > lowestPrice;
+    const alertDrop    = !alertMinBeat && !alertMinHit && lastPrice !== null && currentPrice < lastPrice && dropFromLast >= DROP_THRESHOLD;
+
+    if (alertMinBeat || alertMinHit || alertDrop) {
+      const alreadySent = await wasAlertRecentlySent(id, currentPrice);
+      if (alreadySent) {
+        console.log(`[Monitor] Alerta já enviado recentemente — ${name}`);
+      } else {
+        try {
+          if (alertMinBeat) {
+            await sendPriceAlert({ name, url, store, category, currentPrice, lowestPrice, discountPct: discountFromMin, imageUrl, priceHistory, alertType: 'min_beat' });
+            await registerAlert(id, currentPrice, discountFromMin);
+            recordAlert('min_beat');
+          } else if (alertMinHit) {
+            await sendPriceAlert({ name, url, store, category, currentPrice, lowestPrice, discountPct: 0, imageUrl, priceHistory, alertType: 'min_hit' });
+            await registerAlert(id, currentPrice, 0);
+            recordAlert('min_hit');
+          } else {
+            await sendPriceAlert({ name, url, store, category, currentPrice, lastPrice, discountPct: dropFromLast, imageUrl, priceHistory, alertType: 'drop' });
+            await registerAlert(id, currentPrice, dropFromLast);
+            recordAlert('drop');
+          }
+        } catch (err) {
+          console.error(`[Monitor] Alerta drop/min falhou — ${name}:`, err.message);
+        }
+      }
+    }
   }
+
+  // Salvar preço POR ÚLTIMO — depois de qualquer tentativa de alerta.
+  // Se o alert falhou, ele será re-tentado no próximo scan (porque o registerAlert
+  // não rodou, então wasAlertRecentlySent retorna false).
+  await savePrice(id, currentPrice);
   return 'ok';
 }
 

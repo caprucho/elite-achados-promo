@@ -198,6 +198,33 @@ async function clearUnavailableAlertSent(productId) {
 
 async function addProduct(name, url, store, opts = {}) {
   const { category = null, addedByTelegramId = null, addedByUsername = null } = opts;
+
+  // Verifica se a URL já existe (ativa ou desativada)
+  const { data: existing } = await supabase
+    .from('products')
+    .select('id, active')
+    .eq('url', url)
+    .maybeSingle();
+
+  if (existing) {
+    if (existing.active) {
+      return { id: existing.id, status: 'already_active' };
+    }
+    // Reativa: assume novo dono e atualiza nome/categoria
+    const { error } = await supabase
+      .from('products')
+      .update({
+        name, store, category,
+        active: true,
+        added_by_telegram_id: addedByTelegramId,
+        added_by_username:    addedByUsername,
+      })
+      .eq('id', existing.id);
+    if (error) throw new Error(error.message);
+    return { id: existing.id, status: 'reactivated' };
+  }
+
+  // Insere novo
   const { data, error } = await supabase
     .from('products')
     .insert({
@@ -210,7 +237,7 @@ async function addProduct(name, url, store, opts = {}) {
     .single();
 
   if (error) throw new Error(error.message);
-  return data.id;
+  return { id: data.id, status: 'created' };
 }
 
 async function deactivateProduct(productId) {
@@ -261,13 +288,26 @@ async function findProductByIdAndUser(productId, telegramId) {
 }
 
 async function addSuggestion(telegramId, username, url, note = null) {
+  // Dedup: usuário pode ter sugestão pendente da mesma URL
+  const { data: existing } = await supabase
+    .from('suggestions')
+    .select('id')
+    .eq('telegram_id', String(telegramId))
+    .eq('url', url)
+    .eq('status', 'pending')
+    .maybeSingle();
+
+  if (existing) {
+    return { id: existing.id, status: 'duplicate' };
+  }
+
   const { data, error } = await supabase
     .from('suggestions')
     .insert({ telegram_id: String(telegramId), username, url, note })
     .select('id')
     .single();
   if (error) throw new Error(error.message);
-  return data.id;
+  return { id: data.id, status: 'created' };
 }
 
 async function getPendingSuggestions(limit = 50) {

@@ -4,6 +4,8 @@ const axios = require('axios');
 
 const { TELEGRAM_BOT_TOKEN, TELEGRAM_CHANNEL_ID, TELEGRAM_ADMIN_USER_ID } = process.env;
 const BOT_USERNAME = process.env.TELEGRAM_BOT_USERNAME || 'Elite_Achados_PromoBOT';
+const ALERT_SEND_DELAY_MS  = parseInt(process.env.ALERT_SEND_DELAY_MS  || '1500', 10);
+const ALERT_MAX_RETRIES    = parseInt(process.env.ALERT_MAX_RETRIES    || '5', 10);
 
 if (!TELEGRAM_BOT_TOKEN || !TELEGRAM_CHANNEL_ID) {
   throw new Error('TELEGRAM_BOT_TOKEN e TELEGRAM_CHANNEL_ID são obrigatórios no .env');
@@ -12,13 +14,45 @@ if (!TELEGRAM_BOT_TOKEN || !TELEGRAM_CHANNEL_ID) {
 // polling: false — só enviamos mensagens, não precisamos receber
 const bot = new TelegramBot(TELEGRAM_BOT_TOKEN, { polling: false });
 
+const sleep = (ms) => new Promise((res) => setTimeout(res, ms));
+
 function formatPrice(price) {
   return price.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
 }
 
-// MarkdownV2 exige escape de caracteres especiais fora de links/bold
+// MarkdownV2 — escape pra texto FORA de links
 function escapeMarkdown(text) {
   return text.replace(/[_*[\]()~`>#+\-=|{}.!]/g, '\\$&');
+}
+
+// MarkdownV2 — escape pra URL DENTRO de [text](url)
+// Apenas ')' e '\' precisam ser escapados na parte URL.
+function escapeMdUrl(url) {
+  return String(url).replace(/[\\)]/g, '\\$&');
+}
+
+// Wrapper que aplica delay + retry com backoff em 429 (rate limit do Telegram)
+async function tgSend(method, ...args) {
+  if (ALERT_SEND_DELAY_MS > 0) await sleep(ALERT_SEND_DELAY_MS);
+
+  let lastErr;
+  for (let attempt = 0; attempt <= ALERT_MAX_RETRIES; attempt++) {
+    try {
+      return await bot[method](...args);
+    } catch (err) {
+      lastErr = err;
+      const code     = err?.response?.body?.error_code;
+      const retryAfter = err?.response?.body?.parameters?.retry_after;
+      const isRateLimit = code === 429 || /\b429\b/.test(err.message || '');
+
+      if (!isRateLimit) throw err;
+
+      const wait = ((retryAfter || 1) + 0.5) * 1000;
+      console.warn(`[Telegram] 429 — retry em ${(wait / 1000).toFixed(1)}s (tentativa ${attempt + 1}/${ALERT_MAX_RETRIES + 1})`);
+      await sleep(wait);
+    }
+  }
+  throw lastErr;
 }
 
 const CHART_MIN_CHANGES = parseInt(process.env.CHART_MIN_CHANGES || '15', 10);
@@ -120,6 +154,7 @@ async function sendPriceAlert({ name, url, store, category, currentPrice, lowest
   const storeLabel    = escapeMarkdown(store.toUpperCase());
   const nameLabel     = escapeMarkdown(name);
   const pctLabel      = escapeMarkdown((discountPct || 0).toFixed(1));
+  const safeUrl       = escapeMdUrl(url);
   const categoryLine  = category && CATEGORY_LABELS[category]
     ? `\n🗂️ _${escapeMarkdown(CATEGORY_LABELS[category])}_`
     : '';
@@ -135,7 +170,7 @@ async function sendPriceAlert({ name, url, store, category, currentPrice, lowest
       `📉 Mínimo anterior: ~${escapeMarkdown(formatPrice(lowestPrice))}~`,
       `🏷️ *${pctLabel}%* abaixo do menor preço já registrado`,
       ``,
-      `🛒 [Ver oferta](${url})${categoryLine}`,
+      `🛒 [Ver oferta](${safeUrl})${categoryLine}`,
     ].join('\n');
   } else if (alertType === 'min_hit') {
     caption = [
@@ -146,7 +181,7 @@ async function sendPriceAlert({ name, url, store, category, currentPrice, lowest
       `💰 Preço atual: *${escapeMarkdown(formatPrice(currentPrice))}*`,
       `📌 Igual ao menor preço já registrado`,
       ``,
-      `🛒 [Ver oferta](${url})${categoryLine}`,
+      `🛒 [Ver oferta](${safeUrl})${categoryLine}`,
     ].join('\n');
   } else if (alertType === 'back_in_stock') {
     const lines = [
@@ -157,7 +192,7 @@ async function sendPriceAlert({ name, url, store, category, currentPrice, lowest
       `💰 Preço atual: *${escapeMarkdown(formatPrice(currentPrice))}*`,
     ];
     if (lowestPrice) lines.push(`📌 Mínimo histórico: ${escapeMarkdown(formatPrice(lowestPrice))}`);
-    lines.push(``, `🛒 [Ver oferta](${url})${categoryLine}`);
+    lines.push(``, `🛒 [Ver oferta](${safeUrl})${categoryLine}`);
     caption = lines.join('\n');
   } else if (alertType === 'price_bug') {
     caption = [
@@ -173,7 +208,7 @@ async function sendPriceAlert({ name, url, store, category, currentPrice, lowest
       `⚠️ _Pode ser erro do site\\. Se for real, esgota em minutos\\._`,
       `⚡ *CONFIRME ANTES DE FECHAR — corre\\!*`,
       ``,
-      `🛒 [VER OFERTA AGORA](${url})${categoryLine}`,
+      `🛒 [VER OFERTA AGORA](${safeUrl})${categoryLine}`,
     ].join('\n');
   } else {
     caption = [
@@ -185,43 +220,56 @@ async function sendPriceAlert({ name, url, store, category, currentPrice, lowest
       `⬇️ Preço anterior: ~${escapeMarkdown(formatPrice(lastPrice))}~`,
       `🏷️ Queda de *${pctLabel}%* desde o último scan`,
       ``,
-      `🛒 [Ver oferta](${url})${categoryLine}`,
+      `🛒 [Ver oferta](${safeUrl})${categoryLine}`,
     ].join('\n');
   }
 
   const reply_markup = buildShareKeyboard({ name, url, currentPrice, alertType, discountPct });
 
+  let mainSent = false;
   try {
     if (imageUrl) {
-      await bot.sendPhoto(TELEGRAM_CHANNEL_ID, imageUrl, {
+      await tgSend('sendPhoto', TELEGRAM_CHANNEL_ID, imageUrl, {
         caption,
         parse_mode: 'MarkdownV2',
         reply_markup,
       });
     } else {
-      await bot.sendMessage(TELEGRAM_CHANNEL_ID, caption, {
+      await tgSend('sendMessage', TELEGRAM_CHANNEL_ID, caption, {
         parse_mode: 'MarkdownV2',
         disable_web_page_preview: false,
         reply_markup,
       });
     }
+    mainSent = true;
     console.log(`[Telegram] Alerta enviado: ${name} — ${formatPrice(currentPrice)}`);
   } catch (err) {
     console.error('[Telegram] Erro ao enviar alerta:', err.message);
     if (imageUrl) {
-      await bot.sendMessage(TELEGRAM_CHANNEL_ID, caption, {
-        parse_mode: 'MarkdownV2',
-        disable_web_page_preview: false,
-        reply_markup,
-      }).then(() => console.log(`[Telegram] Alerta enviado (sem foto): ${name} — ${formatPrice(currentPrice)}`))
-        .catch(() => {});
+      try {
+        await tgSend('sendMessage', TELEGRAM_CHANNEL_ID, caption, {
+          parse_mode: 'MarkdownV2',
+          disable_web_page_preview: false,
+          reply_markup,
+        });
+        mainSent = true;
+        console.log(`[Telegram] Alerta enviado (sem foto): ${name} — ${formatPrice(currentPrice)}`);
+      } catch (err2) {
+        console.error('[Telegram] Fallback sem foto também falhou:', err2.message);
+      }
     }
   }
 
-  // Envia gráfico de histórico de preço como mensagem separada
+  // Sinaliza pro chamador (index.js) se o alerta foi enviado, pra ele decidir
+  // se grava o preço no histórico (E: salvar preço só se alerta confirmado).
+  if (!mainSent) {
+    throw new Error('Falha ao enviar alerta após retries');
+  }
+
+  // Envia gráfico de histórico de preço como mensagem separada (best effort)
   const chartUrl = await buildChartUrl(priceHistory);
   if (chartUrl) {
-    await bot.sendPhoto(TELEGRAM_CHANNEL_ID, chartUrl, {
+    await tgSend('sendPhoto', TELEGRAM_CHANNEL_ID, chartUrl, {
       caption: `📊 *Histórico — ${escapeMarkdown(name)}*`,
       parse_mode: 'MarkdownV2',
     }).catch((err) => console.warn('[Chart] Erro ao enviar gráfico:', err.message));
@@ -234,7 +282,7 @@ async function sendAdminMessage(text, opts = {}) {
     return;
   }
   try {
-    await bot.sendMessage(TELEGRAM_ADMIN_USER_ID, text, { parse_mode: 'Markdown', disable_web_page_preview: true, ...opts });
+    await tgSend('sendMessage', TELEGRAM_ADMIN_USER_ID, text, { parse_mode: 'Markdown', disable_web_page_preview: true, ...opts });
   } catch (err) {
     console.error('[Telegram] Erro ao notificar admin:', err.message);
   }
