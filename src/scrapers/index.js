@@ -5,6 +5,7 @@ const kabum        = require('./kabum');
 const wap          = require('./wap');
 const netshoes     = require('./netshoes');
 const farmrio      = require('./farmrio');
+const animale      = require('./animale');
 
 const ROUTES = [
   { match: (h) => h.includes('mercadolivre.com'),                scraper: mercadolivre },
@@ -14,6 +15,7 @@ const ROUTES = [
   { match: (h) => h.includes('wap.ind.br'),                      scraper: wap          },
   { match: (h) => h.includes('netshoes.com'),                    scraper: netshoes     },
   { match: (h) => h.includes('farmrio.com'),                     scraper: farmrio      },
+  { match: (h) => h.includes('animale.com'),                     scraper: animale      },
 ];
 
 async function getPrice(productUrl) {
