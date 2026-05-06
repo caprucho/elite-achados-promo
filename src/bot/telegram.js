@@ -107,7 +107,7 @@ function buildShareKeyboard({ name, url, currentPrice, alertType, discountPct })
     inline_keyboard: [
       [
         { text: '📤 Compartilhar', url: shareUrl },
-        { text: '💎 Meus produtos', url: botUrl },
+        { text: '💎 Monitorar produto', url: botUrl },
       ],
     ],
   };
