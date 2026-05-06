@@ -12,7 +12,8 @@ const jsonld       = require('./jsonld');
 const ROUTES = [
   { match: (h) => h.includes('mercadolivre.com'),                scraper: mercadolivre },
   { match: (h) => h.includes('amazon.com') || h === 'amzn.to',  scraper: amazon       },
-  { match: (h) => h.includes('dafiti.com'),                      scraper: dafiti       },
+  // Dafiti hoje só tem <meta itemprop="price"> (sem JSON-LD Product) — jsonld.js cobre
+  { match: (h) => h.includes('dafiti.com'),                      scraper: jsonld       },
   { match: (h) => h.includes('kabum.com'),                       scraper: kabum        },
   { match: (h) => h.includes('wap.ind.br'),                      scraper: wap          },
   { match: (h) => h.includes('netshoes.com'),                    scraper: netshoes     },
