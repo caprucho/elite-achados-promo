@@ -1,132 +1,292 @@
 require('dotenv').config();
 const TelegramBot = require('node-telegram-bot-api');
-const { getActiveProducts, addProduct, deactivateProduct } = require('./db/queries');
+const {
+  getActiveProducts, addProduct, deactivateProduct,
+  countProductsByUser, getProductsByUser, findProductByIdAndUser,
+  addSuggestion, getPendingSuggestions, updateSuggestionStatus,
+} = require('./db/queries');
 const { getPrice } = require('./scrapers');
-const { closeBrowser } = require('./scrapers/browser');
 
 const { TELEGRAM_BOT_TOKEN, TELEGRAM_ADMIN_USER_ID } = process.env;
 
 if (!TELEGRAM_BOT_TOKEN) {
   throw new Error('TELEGRAM_BOT_TOKEN é obrigatório no .env');
 }
-if (!TELEGRAM_ADMIN_USER_ID) {
-  throw new Error('TELEGRAM_ADMIN_USER_ID é obrigatório no .env (seu ID pessoal do Telegram)');
-}
+
+const FREE_USER_PRODUCT_LIMIT = parseInt(process.env.FREE_USER_PRODUCT_LIMIT || '3', 10);
+const PREMIUM_IDS = (process.env.TELEGRAM_PREMIUM_USER_IDS || '')
+  .split(',').map((s) => s.trim()).filter(Boolean);
 
 const bot = new TelegramBot(TELEGRAM_BOT_TOKEN, { polling: true });
 
-function isAdmin(msg) {
-  return String(msg.from.id) === String(TELEGRAM_ADMIN_USER_ID);
-}
+const STORE_ROUTES = [
+  { match: 'mercadolivre.com', store: 'mercadolivre', label: 'Mercado Livre' },
+  { match: 'amazon.com.br',    store: 'amazon',       label: 'Amazon BR'     },
+  { match: 'amzn.to',          store: 'amazon',       label: 'Amazon BR'     },
+  { match: 'kabum.com.br',     store: 'kabum',        label: 'KaBuM!'        },
+  { match: 'netshoes.com.br',  store: 'netshoes',     label: 'Netshoes'      },
+  { match: 'dafiti.com.br',    store: 'dafiti',       label: 'Dafiti'        },
+  { match: 'farmrio.com.br',   store: 'farmrio',      label: 'Farm Rio'      },
+  { match: 'wap.ind.br',       store: 'wap',          label: 'WAP'           },
+];
 
 function detectStore(url) {
-  const h = new URL(url).hostname;
-  if (h.includes('mercadolivre')) return 'Mercado Livre';
-  if (h.includes('amazon'))       return 'Amazon';
-  if (h.includes('dafiti'))       return 'Dafiti';
-  if (h.includes('kabum'))        return 'KaBuM';
-  if (h.includes('wap'))          return 'WAP';
-  if (h.includes('netshoes'))     return 'Netshoes';
-  if (h.includes('farmrio'))      return 'Farm Rio';
-  if (h === 'amzn.to')            return 'Amazon';
-  return h;
+  let h;
+  try { h = new URL(url).hostname.toLowerCase(); } catch { return null; }
+  const route = STORE_ROUTES.find((r) => h.includes(r.match) || h === r.match);
+  return route || null;
 }
 
-// /addproduto <url>
-bot.onText(/\/addproduto (.+)/, async (msg, match) => {
-  if (!isAdmin(msg)) return;
+function isAdmin(msg) {
+  return TELEGRAM_ADMIN_USER_ID && String(msg.from.id) === String(TELEGRAM_ADMIN_USER_ID);
+}
 
+function isPremium(msg) {
+  return isAdmin(msg) || PREMIUM_IDS.includes(String(msg.from.id));
+}
+
+function fmtPrice(p) {
+  return p.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
+}
+
+const SUPPORTED_LIST = [
+  '🛒 *Lojas suportadas*',
+  '',
+  '• Mercado Livre',
+  '• Amazon (.com.br / amzn.to)',
+  '• KaBuM!',
+  '• Netshoes',
+  '• Dafiti',
+  '• Farm Rio',
+  '• WAP (loja oficial)',
+  '',
+  '_Para outras lojas, use_ `/sugerir <link>` _que eu avalio._',
+].join('\n');
+
+function helpMessage(admin) {
+  const base = [
+    '🤖 *Como usar o bot*',
+    '',
+    `📦 \`/addproduto <link>\` — começa a monitorar um produto pra você (limite: ${FREE_USER_PRODUCT_LIMIT} grátis)`,
+    '📋 `/meusprodutos` — lista os produtos que você cadastrou',
+    '🗑 `/removerproduto <id>` — para de monitorar (apenas os seus)',
+    '',
+    '💡 `/sugerir <link>` — sugere um produto pro canal (sem limite, eu reviso)',
+    '',
+    '🛒 `/lojas` — lojas suportadas',
+    'ℹ️ `/ajuda` — esta mensagem',
+    '',
+    '✨ *Quer mais que ' + FREE_USER_PRODUCT_LIMIT + ' produtos?* Me chama no privado pra liberar acesso premium.',
+  ];
+  if (admin) {
+    base.push(
+      '',
+      '👑 *Admin*',
+      '`/listarprodutos` — todos os ativos',
+      '`/sugestoes` — pendentes',
+      '`/aprovarsugestao <id>`',
+      '`/rejeitarsugestao <id>`',
+    );
+  }
+  return base.join('\n');
+}
+
+async function reply(msg, text, opts = {}) {
+  return bot.sendMessage(msg.chat.id, text, { parse_mode: 'Markdown', ...opts });
+}
+
+// ── /start, /ajuda, /help ────────────────────────────────────────────────────
+bot.onText(/^\/(start|ajuda|help)\b/, async (msg) => {
+  await reply(msg, helpMessage(isAdmin(msg)));
+});
+
+// ── /lojas ───────────────────────────────────────────────────────────────────
+bot.onText(/^\/lojas\b/, async (msg) => {
+  await reply(msg, SUPPORTED_LIST);
+});
+
+// ── /addproduto <url> ────────────────────────────────────────────────────────
+bot.onText(/^\/addproduto\s+(.+)$/, async (msg, match) => {
   const url = match[1].trim();
+  const userId = String(msg.from.id);
+  const username = msg.from.username || msg.from.first_name || 'desconhecido';
 
-  let hostname;
-  try {
-    hostname = new URL(url).hostname;
-  } catch {
-    await bot.sendMessage(msg.chat.id, '❌ URL inválida.');
-    return;
+  // Valida URL
+  try { new URL(url); } catch {
+    return reply(msg, '❌ URL inválida. Envie a URL completa do produto.');
   }
 
-  await bot.sendMessage(msg.chat.id, '⏳ Buscando informações do produto...');
+  // Loja suportada?
+  const route = detectStore(url);
+  if (!route) {
+    return reply(msg,
+      `❌ Loja não suportada.\n\n${SUPPORTED_LIST}\n\n` +
+      `Quer registrar como sugestão pra eu avaliar?\n\`/sugerir ${url}\``
+    );
+  }
+
+  // Limite por usuário (admin/premium passa direto)
+  if (!isPremium(msg)) {
+    const count = await countProductsByUser(userId);
+    if (count >= FREE_USER_PRODUCT_LIMIT) {
+      return reply(msg,
+        `❌ Você já tem ${count} produtos cadastrados (limite gratuito: ${FREE_USER_PRODUCT_LIMIT}).\n\n` +
+        '✨ Pra cadastrar mais, me chame no privado pra liberar acesso premium.\n\n' +
+        '🗑 Ou remova um antigo: `/meusprodutos` → `/removerproduto <id>`'
+      );
+    }
+  }
+
+  await reply(msg, '⏳ Buscando preço...');
+
+  let result;
+  try {
+    result = await getPrice(url);
+  } catch (err) {
+    return reply(msg, `❌ Erro ao consultar a loja: ${err.message}`);
+  }
+
+  if (!result) {
+    return reply(msg,
+      '❌ Não consegui extrair o preço. URL errada, produto indisponível, ou bloqueio temporário da loja.\n\n' +
+      `Quer registrar como sugestão? \`/sugerir ${url}\``
+    );
+  }
+
+  const { price, name: scrapedName } = result;
+  const name = scrapedName || `Produto (${route.label})`;
 
   try {
-    const result = await getPrice(url);
-    if (!result) {
-      await bot.sendMessage(msg.chat.id, '❌ Não consegui extrair o preço. Verifique se a loja é suportada e a URL está correta.');
-      return;
-    }
-
-    const { price, name: scrapedName } = result;
-    const store = detectStore(url);
-    const name = scrapedName || `Produto (${store})`;
-    const priceFormatted = price.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
-
-    const id = await addProduct(name, url, store);
-
-    await bot.sendMessage(msg.chat.id,
-      `✅ Produto adicionado!\n\nID: ${id}\nNome: ${name}\nLoja: ${store}\nPreço atual: ${priceFormatted}`
+    const id = await addProduct(name, url, route.store, {
+      addedByTelegramId: userId,
+      addedByUsername: username,
+    });
+    await reply(msg,
+      `✅ *Adicionado!*\n\n📦 ${name}\n🏪 ${route.label}\n💰 Preço atual: *${fmtPrice(price)}*\n\n` +
+      `🆔 \`${id}\`\n\n_Vou alertar se baixar significativamente._`
     );
   } catch (err) {
-    await bot.sendMessage(msg.chat.id, `❌ Erro: ${err.message}`);
+    if (err.message.includes('duplicate') || err.message.includes('unique')) {
+      return reply(msg, 'ℹ️ Esse produto já está sendo monitorado por alguém. Você vai receber os alertas no canal.');
+    }
+    await reply(msg, `❌ Erro ao salvar: ${err.message}`);
   }
 });
 
-// /removerproduto <id>
-bot.onText(/\/removerproduto (\d+)/, async (msg, match) => {
-  if (!isAdmin(msg)) return;
+// ── /meusprodutos ────────────────────────────────────────────────────────────
+bot.onText(/^\/meusprodutos\b/, async (msg) => {
+  const userId = String(msg.from.id);
+  const products = await getProductsByUser(userId);
 
-  const productId = parseInt(match[1], 10);
+  if (!products.length) {
+    return reply(msg, 'Você ainda não cadastrou nenhum produto.\n\nUse `/addproduto <link>` pra começar.');
+  }
+
+  const limitInfo = isPremium(msg) ? '✨ premium' : `${products.length}/${FREE_USER_PRODUCT_LIMIT}`;
+  const lines = products.map((p) =>
+    `• *${p.name}*\n  🏪 ${p.store}  •  🆔 \`${p.id}\``
+  );
+  await reply(msg, `📋 *Seus produtos* (${limitInfo})\n\n${lines.join('\n\n')}`);
+});
+
+// ── /removerproduto <uuid> ───────────────────────────────────────────────────
+bot.onText(/^\/removerproduto\s+(\S+)/, async (msg, match) => {
+  const productId = match[1].trim();
+  const userId = String(msg.from.id);
+
+  // Admin remove qualquer; usuário só os seus
+  if (!isAdmin(msg)) {
+    const owned = await findProductByIdAndUser(productId, userId);
+    if (!owned) {
+      return reply(msg, '❌ Produto não encontrado entre os seus. Veja `/meusprodutos`.');
+    }
+  }
 
   try {
     await deactivateProduct(productId);
-    await bot.sendMessage(msg.chat.id, `✅ Produto #${productId} desativado com sucesso.`);
+    await reply(msg, '✅ Produto desativado. Você não receberá mais alertas dele.');
   } catch (err) {
-    await bot.sendMessage(msg.chat.id, `❌ Erro ao desativar produto #${productId}: ${err.message}`);
+    await reply(msg, `❌ Erro: ${err.message}`);
   }
 });
 
-// /listarprodutos
-bot.onText(/\/listarprodutos/, async (msg) => {
-  if (!isAdmin(msg)) return;
+// ── /sugerir <url> ───────────────────────────────────────────────────────────
+bot.onText(/^\/sugerir\s+(.+)$/, async (msg, match) => {
+  const raw = match[1].trim();
+  const userId = String(msg.from.id);
+  const username = msg.from.username || msg.from.first_name || 'desconhecido';
 
-  const products = await getActiveProducts();
+  // Aceita URL + nota opcional separada por espaço
+  const [url, ...noteParts] = raw.split(/\s+/);
+  const note = noteParts.join(' ').trim() || null;
 
-  if (!products.length) {
-    await bot.sendMessage(msg.chat.id, 'Nenhum produto ativo no momento.');
-    return;
+  try { new URL(url); } catch {
+    return reply(msg, '❌ URL inválida.\n\nUso: `/sugerir <link> [comentário opcional]`');
   }
 
-  // Telegram limite de 4096 chars — divide em blocos se necessário
-  const lines = products.map((p) => `#${p.id} — ${p.name}\n${p.store} | ${p.url}`);
-  let block = `📋 *${products.length} produtos ativos:*\n\n`;
+  try {
+    const id = await addSuggestion(userId, username, url, note);
+    await reply(msg, `✅ Sugestão registrada!\n🆔 \`${id}\`\n\nVou avaliar e te aviso se for adicionada.`);
+  } catch (err) {
+    await reply(msg, `❌ Erro: ${err.message}`);
+  }
+});
 
+// ── ADMIN: /listarprodutos ───────────────────────────────────────────────────
+bot.onText(/^\/listarprodutos\b/, async (msg) => {
+  if (!isAdmin(msg)) return;
+  const products = await getActiveProducts();
+  if (!products.length) return reply(msg, 'Nenhum produto ativo.');
+
+  const lines = products.map((p) => {
+    const by = p.added_by_username ? ` • por @${p.added_by_username}` : '';
+    return `• *${p.name}*\n  🏪 ${p.store}${by}\n  🆔 \`${p.id}\``;
+  });
+
+  let block = `📋 *${products.length} produtos ativos:*\n\n`;
   for (const line of lines) {
-    if ((block + line + '\n\n').length > 4000) {
-      await bot.sendMessage(msg.chat.id, block, { parse_mode: 'Markdown' });
+    if ((block + line + '\n\n').length > 3800) {
+      await reply(msg, block);
       block = '';
     }
     block += line + '\n\n';
   }
+  if (block.trim()) await reply(msg, block);
+});
 
-  if (block.trim()) {
-    await bot.sendMessage(msg.chat.id, block, { parse_mode: 'Markdown' });
+// ── ADMIN: /sugestoes ────────────────────────────────────────────────────────
+bot.onText(/^\/sugestoes\b/, async (msg) => {
+  if (!isAdmin(msg)) return;
+  const sugs = await getPendingSuggestions();
+  if (!sugs.length) return reply(msg, 'Nenhuma sugestão pendente.');
+
+  const lines = sugs.map((s) => {
+    const noteLine = s.note ? `\n  💬 ${s.note}` : '';
+    return `🆔 \`${s.id}\`\n  👤 @${s.username || s.telegram_id}\n  🔗 ${s.url}${noteLine}`;
+  });
+  await reply(msg, `📨 *${sugs.length} sugestões pendentes:*\n\n${lines.join('\n\n')}`);
+});
+
+// ── ADMIN: /aprovarsugestao <id> | /rejeitarsugestao <id> ────────────────────
+bot.onText(/^\/(aprovar|rejeitar)sugestao\s+(\S+)/, async (msg, match) => {
+  if (!isAdmin(msg)) return;
+  const action = match[1];
+  const id = match[2].trim();
+  try {
+    await updateSuggestionStatus(id, action === 'aprovar' ? 'approved' : 'rejected');
+    await reply(msg, `✅ Sugestão ${action === 'aprovar' ? 'aprovada' : 'rejeitada'}.`);
+  } catch (err) {
+    await reply(msg, `❌ Erro: ${err.message}`);
   }
 });
 
-// /ajuda
-bot.onText(/\/ajuda|\/start/, async (msg) => {
-  if (!isAdmin(msg)) return;
-
-  await bot.sendMessage(msg.chat.id, [
-    '🤖 *Comandos disponíveis:*',
-    '',
-    '`/addproduto <url>` — adiciona produto pelo link',
-    '`/removerproduto <id>` — desativa produto pelo ID',
-    '`/listarprodutos` — lista todos os produtos ativos',
-  ].join('\n'), { parse_mode: 'Markdown' });
+bot.on('polling_error', (err) => {
+  console.warn('[Bot] polling error:', err.code || err.message);
 });
 
-process.on('SIGINT',  () => closeBrowser().then(() => process.exit(0)));
-process.on('SIGTERM', () => closeBrowser().then(() => process.exit(0)));
+console.log('Bot interativo iniciado.');
+console.log(`  Limite gratuito : ${FREE_USER_PRODUCT_LIMIT} produtos`);
+console.log(`  Premium IDs     : ${PREMIUM_IDS.length || '(nenhum)'}`);
+console.log(`  Admin           : ${TELEGRAM_ADMIN_USER_ID || '(não definido)'}`);
 
-console.log('Bot de comandos admin iniciado. Aguardando mensagens...');
-console.log(`Admin: ${TELEGRAM_ADMIN_USER_ID}`);
+module.exports = { bot };

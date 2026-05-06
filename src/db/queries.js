@@ -136,10 +136,16 @@ async function getConsecutiveUnavailableCount(productId) {
   return count;
 }
 
-async function addProduct(name, url, store) {
+async function addProduct(name, url, store, opts = {}) {
+  const { category = null, addedByTelegramId = null, addedByUsername = null } = opts;
   const { data, error } = await supabase
     .from('products')
-    .insert({ name, url, store, active: true })
+    .insert({
+      name, url, store, category,
+      active: true,
+      added_by_telegram_id: addedByTelegramId,
+      added_by_username:    addedByUsername,
+    })
     .select('id')
     .single();
 
@@ -153,6 +159,76 @@ async function deactivateProduct(productId) {
     .update({ active: false })
     .eq('id', productId);
 
+  if (error) throw new Error(error.message);
+}
+
+async function countProductsByUser(telegramId) {
+  const { count, error } = await supabase
+    .from('products')
+    .select('*', { count: 'exact', head: true })
+    .eq('added_by_telegram_id', String(telegramId))
+    .eq('active', true);
+  if (error) {
+    console.error('[countProductsByUser] Erro:', error.message);
+    return 0;
+  }
+  return count || 0;
+}
+
+async function getProductsByUser(telegramId) {
+  const { data, error } = await supabase
+    .from('products')
+    .select('id, name, store, url')
+    .eq('added_by_telegram_id', String(telegramId))
+    .eq('active', true)
+    .order('name', { ascending: true });
+  if (error) {
+    console.error('[getProductsByUser] Erro:', error.message);
+    return [];
+  }
+  return data || [];
+}
+
+async function findProductByIdAndUser(productId, telegramId) {
+  const { data, error } = await supabase
+    .from('products')
+    .select('id, name, added_by_telegram_id')
+    .eq('id', productId)
+    .maybeSingle();
+  if (error || !data) return null;
+  if (String(data.added_by_telegram_id) !== String(telegramId)) return null;
+  return data;
+}
+
+async function addSuggestion(telegramId, username, url, note = null) {
+  const { data, error } = await supabase
+    .from('suggestions')
+    .insert({ telegram_id: String(telegramId), username, url, note })
+    .select('id')
+    .single();
+  if (error) throw new Error(error.message);
+  return data.id;
+}
+
+async function getPendingSuggestions(limit = 50) {
+  const { data, error } = await supabase
+    .from('suggestions')
+    .select('*')
+    .eq('status', 'pending')
+    .order('created_at', { ascending: false })
+    .limit(limit);
+  if (error) {
+    console.error('[getPendingSuggestions] Erro:', error.message);
+    return [];
+  }
+  return data || [];
+}
+
+async function updateSuggestionStatus(id, status) {
+  const { error } = await supabase
+    .from('suggestions')
+    .update({ status })
+    .eq('id', id);
   if (error) throw new Error(error.message);
 }
 
@@ -208,4 +284,10 @@ module.exports = {
   addProduct,
   deactivateProduct,
   getWeeklyTopDrops,
+  countProductsByUser,
+  getProductsByUser,
+  findProductByIdAndUser,
+  addSuggestion,
+  getPendingSuggestions,
+  updateSuggestionStatus,
 };

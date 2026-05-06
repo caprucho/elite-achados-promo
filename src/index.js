@@ -4,6 +4,18 @@ const { getPrice }       = require('./scrapers');
 const { sendPriceAlert } = require('./bot/telegram');
 const { closeBrowser }   = require('./scrapers/browser');
 
+// Auto-inicia o bot interativo (polling) no mesmo processo, exceto em modo cron
+// ou se explicitamente desligado. Set ENABLE_BOT_COMMANDS=false se rodar como
+// serviço separado pra evitar conflito de polling (Telegram só permite 1 poller
+// por token).
+if (process.env.RUN_ONCE !== 'true' && process.env.ENABLE_BOT_COMMANDS !== 'false') {
+  try {
+    require('./commands');
+  } catch (err) {
+    console.warn('[Monitor] Bot interativo não iniciado:', err.message);
+  }
+}
+
 process.on('SIGINT',  () => closeBrowser().then(() => process.exit(0)));
 process.on('SIGTERM', () => closeBrowser().then(() => process.exit(0)));
 
