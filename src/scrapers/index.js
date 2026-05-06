@@ -27,6 +27,7 @@ const ROUTES = [
   { match: (h) => h.includes('infocellshop.com'),                scraper: jsonld       },
   { match: (h) => h.includes('iceloshop.com'),                   scraper: jsonld       },
   { match: (h) => h.includes('sephora.com'),                     scraper: jsonld       },
+  { match: (h) => h.includes('pichau.com'),                      scraper: jsonld       },
 ];
 
 async function getPrice(productUrl) {

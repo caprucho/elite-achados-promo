@@ -40,6 +40,7 @@ const STORE_ROUTES = [
   { match: 'infocellshop.com', store: 'infocellshop', label: 'Infocellshop'  },
   { match: 'iceloshop.com',    store: 'iceloshop',    label: 'Icelo Shop'    },
   { match: 'sephora.com',      store: 'sephora',      label: 'Sephora'       },
+  { match: 'pichau.com',       store: 'pichau',       label: 'Pichau'        },
   { match: 'wap.ind.br',       store: 'wap',          label: 'WAP'           },
 ];
 
@@ -80,10 +81,10 @@ const SUPPORTED_LIST = [
   '• Animale',
   '• Zattini',
   '• Apple Store BR',
-  '• LG Brasil',
   '• Sephora',
-  '• Fast Shop',
+  '• Pichau',
   '• Keychron Brasil',
+  '• Fast Shop',
   '• Infocellshop, Icelo Shop',
   '• WAP (loja oficial)',
   '',
