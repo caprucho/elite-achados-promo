@@ -7,6 +7,7 @@ const netshoes     = require('./netshoes');
 const farmrio      = require('./farmrio');
 const animale      = require('./animale');
 const zattini      = require('./zattini');
+const jsonld       = require('./jsonld');
 
 const ROUTES = [
   { match: (h) => h.includes('mercadolivre.com'),                scraper: mercadolivre },
@@ -18,6 +19,14 @@ const ROUTES = [
   { match: (h) => h.includes('farmrio.com'),                     scraper: farmrio      },
   { match: (h) => h.includes('animale.com'),                     scraper: animale      },
   { match: (h) => h.includes('zattini.com'),                     scraper: zattini      },
+  // Lojas com JSON-LD padrão Schema.org — usam scraper genérico
+  { match: (h) => h.includes('apple.com'),                       scraper: jsonld       },
+  { match: (h) => h.includes('lg.com'),                          scraper: jsonld       },
+  { match: (h) => h.includes('keychronbrasil.com'),              scraper: jsonld       },
+  { match: (h) => h.includes('fastshop.com'),                    scraper: jsonld       },
+  { match: (h) => h.includes('infocellshop.com'),                scraper: jsonld       },
+  { match: (h) => h.includes('iceloshop.com'),                   scraper: jsonld       },
+  { match: (h) => h.includes('sephora.com'),                     scraper: jsonld       },
 ];
 
 async function getPrice(productUrl) {
