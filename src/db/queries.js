@@ -196,6 +196,21 @@ async function clearUnavailableAlertSent(productId) {
   if (error) console.error('[clearUnavailableAlertSent]', error.message);
 }
 
+async function getUnavailableProducts() {
+  const products = await getActiveProducts();
+  const enriched = await Promise.all(products.map(async (p) => {
+    const [count, lastAt, streakStart] = await Promise.all([
+      getConsecutiveUnavailableCount(p.id),
+      getLastScanAt(p.id),
+      getUnavailableStreakStart(p.id),
+    ]);
+    return { ...p, unavailableCount: count, lastScanAt: lastAt, streakStart };
+  }));
+  return enriched
+    .filter((p) => p.unavailableCount > 0 && p.streakStart)
+    .sort((a, b) => new Date(a.streakStart) - new Date(b.streakStart)); // mais antigo primeiro
+}
+
 async function addProduct(name, url, store, opts = {}) {
   const { category = null, addedByTelegramId = null, addedByUsername = null } = opts;
 
@@ -432,4 +447,5 @@ module.exports = {
   wasUnavailableAlertSent,
   markUnavailableAlertSent,
   clearUnavailableAlertSent,
+  getUnavailableProducts,
 };

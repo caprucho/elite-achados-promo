@@ -5,6 +5,7 @@ const {
   countProductsByUser, getProductsByUser, findProductByIdAndUser,
   addSuggestion, getPendingSuggestions, updateSuggestionStatus,
   recordReferral, countReferrals, hasBeenReferred,
+  getUnavailableProducts,
 } = require('./db/queries');
 const { getPrice } = require('./scrapers');
 
@@ -122,6 +123,7 @@ function helpMessage(admin) {
       '',
       '👑 *Admin*',
       '`/listarprodutos` — todos os ativos',
+      '`/indisponiveis` — produtos em backoff',
       '`/sugestoes` — pendentes',
       '`/aprovarsugestao <id>`',
       '`/rejeitarsugestao <id>`',
@@ -383,6 +385,44 @@ bot.onText(/^\/listarprodutos\b/, async (msg) => {
   if (block.trim()) await reply(msg, block);
 });
 
+// ── ADMIN: /indisponiveis ────────────────────────────────────────────────────
+bot.onText(/^\/indisponiveis\b/, async (msg) => {
+  if (!isAdmin(msg)) return;
+
+  await reply(msg, '⏳ Buscando produtos indisponíveis... (pode demorar uns segundos)');
+
+  const list = await getUnavailableProducts();
+  if (!list.length) {
+    return reply(msg, '✅ Nenhum produto em backoff. Tudo disponível.');
+  }
+
+  const fmtTime = (start) => {
+    const ms = Date.now() - new Date(start).getTime();
+    const h = ms / 3600000;
+    if (h < 24) return `${h.toFixed(1)}h`;
+    return `${(h / 24).toFixed(1)}d`;
+  };
+
+  const lines = list.map((p) =>
+    `• *${p.name}*\n` +
+    `  🏪 ${p.store} · 🕒 há ${fmtTime(p.streakStart)} (${p.unavailableCount}x)\n` +
+    `  ${p.url}\n` +
+    `  🆔 \`${p.id}\``
+  );
+
+  let block = `🧟 *${list.length} produto(s) em backoff:*\n\n`;
+  for (const line of lines) {
+    if ((block + line + '\n\n').length > 3800) {
+      await bot.sendMessage(msg.chat.id, block, { parse_mode: 'Markdown', disable_web_page_preview: true });
+      block = '';
+    }
+    block += line + '\n\n';
+  }
+  if (block.trim()) {
+    await bot.sendMessage(msg.chat.id, block, { parse_mode: 'Markdown', disable_web_page_preview: true });
+  }
+});
+
 // ── ADMIN: /sugestoes ────────────────────────────────────────────────────────
 bot.onText(/^\/sugestoes\b/, async (msg) => {
   if (!isAdmin(msg)) return;
@@ -427,6 +467,7 @@ const PUBLIC_COMMANDS = [
 const ADMIN_COMMANDS = [
   ...PUBLIC_COMMANDS,
   { command: 'listarprodutos',    description: '[admin] Listar todos os produtos ativos' },
+  { command: 'indisponiveis',     description: '[admin] Listar produtos em backoff' },
   { command: 'sugestoes',         description: '[admin] Ver sugestões pendentes' },
   { command: 'aprovarsugestao',   description: '[admin] Aprovar sugestão pelo ID' },
   { command: 'rejeitarsugestao',  description: '[admin] Rejeitar sugestão pelo ID' },
