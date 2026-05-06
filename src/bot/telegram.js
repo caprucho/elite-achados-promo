@@ -2,7 +2,7 @@ require('dotenv').config();
 const TelegramBot = require('node-telegram-bot-api');
 const axios = require('axios');
 
-const { TELEGRAM_BOT_TOKEN, TELEGRAM_CHANNEL_ID } = process.env;
+const { TELEGRAM_BOT_TOKEN, TELEGRAM_CHANNEL_ID, TELEGRAM_ADMIN_USER_ID } = process.env;
 const BOT_USERNAME = process.env.TELEGRAM_BOT_USERNAME || 'Elite_Achados_PromoBOT';
 
 if (!TELEGRAM_BOT_TOKEN || !TELEGRAM_CHANNEL_ID) {
@@ -228,4 +228,16 @@ async function sendPriceAlert({ name, url, store, category, currentPrice, lowest
   }
 }
 
-module.exports = { sendPriceAlert };
+async function sendAdminMessage(text, opts = {}) {
+  if (!TELEGRAM_ADMIN_USER_ID) {
+    console.warn('[Telegram] TELEGRAM_ADMIN_USER_ID não configurado — pulando notificação admin');
+    return;
+  }
+  try {
+    await bot.sendMessage(TELEGRAM_ADMIN_USER_ID, text, { parse_mode: 'Markdown', disable_web_page_preview: true, ...opts });
+  } catch (err) {
+    console.error('[Telegram] Erro ao notificar admin:', err.message);
+  }
+}
+
+module.exports = { sendPriceAlert, sendAdminMessage };

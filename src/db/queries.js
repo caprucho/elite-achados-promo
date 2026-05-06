@@ -136,6 +136,61 @@ async function getConsecutiveUnavailableCount(productId) {
   return count;
 }
 
+async function getLastScanAt(productId) {
+  const { data, error } = await supabase
+    .from('price_history')
+    .select('created_at')
+    .eq('product_id', productId)
+    .order('created_at', { ascending: false })
+    .limit(1)
+    .maybeSingle();
+  if (error || !data) return null;
+  return data.created_at;
+}
+
+async function getUnavailableStreakStart(productId) {
+  const { data, error } = await supabase
+    .from('price_history')
+    .select('is_available, created_at')
+    .eq('product_id', productId)
+    .order('created_at', { ascending: false })
+    .limit(200);
+  if (error || !data || data.length === 0) return null;
+  if (data[0].is_available) return null;
+
+  let streakStart = data[0].created_at;
+  for (const r of data) {
+    if (r.is_available) break;
+    streakStart = r.created_at;
+  }
+  return streakStart;
+}
+
+async function wasUnavailableAlertSent(productId) {
+  const { data } = await supabase
+    .from('products')
+    .select('unavailable_alert_sent_at')
+    .eq('id', productId)
+    .maybeSingle();
+  return !!data?.unavailable_alert_sent_at;
+}
+
+async function markUnavailableAlertSent(productId) {
+  const { error } = await supabase
+    .from('products')
+    .update({ unavailable_alert_sent_at: new Date().toISOString() })
+    .eq('id', productId);
+  if (error) console.error('[markUnavailableAlertSent]', error.message);
+}
+
+async function clearUnavailableAlertSent(productId) {
+  const { error } = await supabase
+    .from('products')
+    .update({ unavailable_alert_sent_at: null })
+    .eq('id', productId);
+  if (error) console.error('[clearUnavailableAlertSent]', error.message);
+}
+
 async function addProduct(name, url, store, opts = {}) {
   const { category = null, addedByTelegramId = null, addedByUsername = null } = opts;
   const { data, error } = await supabase
@@ -327,4 +382,9 @@ module.exports = {
   recordReferral,
   countReferrals,
   hasBeenReferred,
+  getLastScanAt,
+  getUnavailableStreakStart,
+  wasUnavailableAlertSent,
+  markUnavailableAlertSent,
+  clearUnavailableAlertSent,
 };
