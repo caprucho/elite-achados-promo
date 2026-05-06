@@ -232,6 +232,40 @@ async function updateSuggestionStatus(id, status) {
   if (error) throw new Error(error.message);
 }
 
+async function recordReferral(referrerId, referredId) {
+  if (String(referrerId) === String(referredId)) return false;
+  const { error } = await supabase
+    .from('referrals')
+    .insert({ referrer_id: String(referrerId), referred_id: String(referredId) });
+  if (error) {
+    if (error.code === '23505') return false; // unique violation: já foi referido
+    console.error('[recordReferral] Erro:', error.message);
+    return false;
+  }
+  return true;
+}
+
+async function countReferrals(referrerId) {
+  const { count, error } = await supabase
+    .from('referrals')
+    .select('*', { count: 'exact', head: true })
+    .eq('referrer_id', String(referrerId));
+  if (error) {
+    console.error('[countReferrals] Erro:', error.message);
+    return 0;
+  }
+  return count || 0;
+}
+
+async function hasBeenReferred(referredId) {
+  const { count, error } = await supabase
+    .from('referrals')
+    .select('*', { count: 'exact', head: true })
+    .eq('referred_id', String(referredId));
+  if (error) return false;
+  return (count || 0) > 0;
+}
+
 async function getWeeklyTopDrops(limit = 5) {
   const since = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString();
 
@@ -290,4 +324,7 @@ module.exports = {
   addSuggestion,
   getPendingSuggestions,
   updateSuggestionStatus,
+  recordReferral,
+  countReferrals,
+  hasBeenReferred,
 };

@@ -4,6 +4,7 @@ const {
   getActiveProducts, addProduct, deactivateProduct,
   countProductsByUser, getProductsByUser, findProductByIdAndUser,
   addSuggestion, getPendingSuggestions, updateSuggestionStatus,
+  recordReferral, countReferrals, hasBeenReferred,
 } = require('./db/queries');
 const { getPrice } = require('./scrapers');
 
@@ -14,6 +15,9 @@ if (!TELEGRAM_BOT_TOKEN) {
 }
 
 const FREE_USER_PRODUCT_LIMIT = parseInt(process.env.FREE_USER_PRODUCT_LIMIT || '3', 10);
+const BONUS_PER_REFERRAL      = parseInt(process.env.BONUS_PER_REFERRAL      || '1', 10);
+const MAX_BONUS_SLOTS         = parseInt(process.env.MAX_BONUS_SLOTS         || '10', 10);
+const BOT_USERNAME            = process.env.TELEGRAM_BOT_USERNAME || 'Elite_Achados_PromoBOT';
 const PREMIUM_IDS = (process.env.TELEGRAM_PREMIUM_USER_IDS || '')
   .split(',').map((s) => s.trim()).filter(Boolean);
 
@@ -45,6 +49,12 @@ function isPremium(msg) {
   return isAdmin(msg) || PREMIUM_IDS.includes(String(msg.from.id));
 }
 
+async function getUserLimit(userId) {
+  const refs = await countReferrals(userId);
+  const bonus = Math.min(refs * BONUS_PER_REFERRAL, MAX_BONUS_SLOTS);
+  return { base: FREE_USER_PRODUCT_LIMIT, bonus, total: FREE_USER_PRODUCT_LIMIT + bonus, refs };
+}
+
 function fmtPrice(p) {
   return p.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
 }
@@ -73,10 +83,12 @@ function helpMessage(admin) {
     '',
     '💡 `/sugerir <link>` — sugere um produto pro canal (sem limite, eu reviso)',
     '',
+    `🤝 \`/convidar\` — pega seu link de indicação. Cada amigo cadastrado = +${BONUS_PER_REFERRAL} slot extra (até +${MAX_BONUS_SLOTS})`,
+    '',
     '🛒 `/lojas` — lojas suportadas',
     'ℹ️ `/ajuda` — esta mensagem',
     '',
-    '✨ *Quer mais que ' + FREE_USER_PRODUCT_LIMIT + ' produtos?* Me chama no privado pra liberar acesso premium.',
+    '✨ *Quer ainda mais?* Me chama no privado pra liberar acesso premium.',
   ];
   if (admin) {
     base.push(
@@ -95,9 +107,58 @@ async function reply(msg, text, opts = {}) {
   return bot.sendMessage(msg.chat.id, text, { parse_mode: 'Markdown', ...opts });
 }
 
-// ── /start, /ajuda, /help ────────────────────────────────────────────────────
-bot.onText(/^\/(start|ajuda|help)\b/, async (msg) => {
+// ── /start [ref_<id>], /ajuda, /help ─────────────────────────────────────────
+bot.onText(/^\/(start|ajuda|help)(?:\s+(\S+))?/, async (msg, match) => {
+  const cmd   = match[1];
+  const param = match[2];
+
+  // Atribuição de referral via /start ref_<userid>
+  if (cmd === 'start' && param && /^ref_\d+$/.test(param)) {
+    const referrerId = param.slice(4);
+    const referredId = String(msg.from.id);
+
+    if (referrerId !== referredId) {
+      const already = await hasBeenReferred(referredId);
+      if (!already) {
+        const ok = await recordReferral(referrerId, referredId);
+        if (ok) {
+          // Notifica o referrer (best effort — pode falhar se ele bloqueou o bot)
+          bot.sendMessage(referrerId,
+            `🎉 *+${BONUS_PER_REFERRAL} slot extra!*\n\nAlguém se cadastrou pelo seu link de indicação. Veja seu novo limite com \`/meusprodutos\`.`,
+            { parse_mode: 'Markdown' }
+          ).catch(() => {});
+
+          await reply(msg, '🤝 Você foi indicado por um amigo! Bem-vindo(a).\n\n' + helpMessage(false));
+          return;
+        }
+      }
+    }
+  }
+
   await reply(msg, helpMessage(isAdmin(msg)));
+});
+
+// ── /convidar ────────────────────────────────────────────────────────────────
+bot.onText(/^\/convidar\b/, async (msg) => {
+  const userId = msg.from.id;
+  const refLink = `https://t.me/${BOT_USERNAME}?start=ref_${userId}`;
+  const { bonus, total, refs } = await getUserLimit(userId);
+  const limitDisplay = isPremium(msg) ? '∞ (premium)' : `${total}`;
+
+  await reply(msg, [
+    '🤝 *Convide e ganhe slots extras!*',
+    '',
+    `Cada amigo que se cadastrar pelo seu link te dá *+${BONUS_PER_REFERRAL} slot extra* (máx +${MAX_BONUS_SLOTS}).`,
+    '',
+    `📊 Indicações: *${refs}*`,
+    `🎁 Bônus atual: *+${bonus}* slots`,
+    `📦 Seu limite total: *${limitDisplay}* produtos`,
+    '',
+    '🔗 *Seu link de indicação* (toque pra copiar):',
+    `\`${refLink}\``,
+    '',
+    '💡 _Dica: copie e mande no zap, no story, num grupo de família. Cada cadastro vira 1 slot novo pra você._',
+  ].join('\n'));
 });
 
 // ── /lojas ───────────────────────────────────────────────────────────────────
@@ -127,11 +188,16 @@ bot.onText(/^\/addproduto\s+(.+)$/, async (msg, match) => {
 
   // Limite por usuário (admin/premium passa direto)
   if (!isPremium(msg)) {
-    const count = await countProductsByUser(userId);
-    if (count >= FREE_USER_PRODUCT_LIMIT) {
+    const [count, limit] = await Promise.all([
+      countProductsByUser(userId),
+      getUserLimit(userId),
+    ]);
+    if (count >= limit.total) {
+      const refLink = `https://t.me/${BOT_USERNAME}?start=ref_${userId}`;
       return reply(msg,
-        `❌ Você já tem ${count} produtos cadastrados (limite gratuito: ${FREE_USER_PRODUCT_LIMIT}).\n\n` +
-        '✨ Pra cadastrar mais, me chame no privado pra liberar acesso premium.\n\n' +
+        `❌ Você já tem ${count} produtos cadastrados (limite atual: ${limit.total}).\n\n` +
+        `🤝 *Ganhe +${BONUS_PER_REFERRAL} slot por amigo indicado:*\n\`${refLink}\`\n\n` +
+        '✨ Ou peça acesso premium no privado.\n' +
         '🗑 Ou remova um antigo: `/meusprodutos` → `/removerproduto <id>`'
       );
     }
@@ -182,7 +248,14 @@ bot.onText(/^\/meusprodutos\b/, async (msg) => {
     return reply(msg, 'Você ainda não cadastrou nenhum produto.\n\nUse `/addproduto <link>` pra começar.');
   }
 
-  const limitInfo = isPremium(msg) ? '✨ premium' : `${products.length}/${FREE_USER_PRODUCT_LIMIT}`;
+  let limitInfo;
+  if (isPremium(msg)) {
+    limitInfo = '✨ premium';
+  } else {
+    const limit = await getUserLimit(userId);
+    const bonusTag = limit.bonus > 0 ? ` (+${limit.bonus} bônus 🤝)` : '';
+    limitInfo = `${products.length}/${limit.total}${bonusTag}`;
+  }
   const lines = products.map((p) =>
     `• *${p.name}*\n  🏪 ${p.store}  •  🆔 \`${p.id}\``
   );
@@ -290,6 +363,7 @@ const PUBLIC_COMMANDS = [
   { command: 'meusprodutos',   description: 'Ver meus produtos cadastrados' },
   { command: 'removerproduto', description: 'Remover um produto seu (use o ID)' },
   { command: 'sugerir',        description: 'Sugerir um produto pro canal' },
+  { command: 'convidar',       description: 'Pegar seu link de indicação (+slots por amigo)' },
   { command: 'lojas',          description: 'Ver lojas suportadas' },
   { command: 'ajuda',          description: 'Como usar o bot' },
 ];

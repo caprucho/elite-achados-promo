@@ -3,6 +3,7 @@ const TelegramBot = require('node-telegram-bot-api');
 const axios = require('axios');
 
 const { TELEGRAM_BOT_TOKEN, TELEGRAM_CHANNEL_ID } = process.env;
+const BOT_USERNAME = process.env.TELEGRAM_BOT_USERNAME || 'Elite_Achados_PromoBOT';
 
 if (!TELEGRAM_BOT_TOKEN || !TELEGRAM_CHANNEL_ID) {
   throw new Error('TELEGRAM_BOT_TOKEN e TELEGRAM_CHANNEL_ID são obrigatórios no .env');
@@ -91,6 +92,27 @@ const CATEGORY_LABELS = {
   esporte:     '⚽ Esporte',
 };
 
+function buildShareKeyboard({ name, url, currentPrice, alertType, discountPct }) {
+  const tag = alertType === 'min_beat' || alertType === 'min_hit'
+    ? '🏆 menor preço já visto'
+    : alertType === 'back_in_stock'
+      ? '🟢 voltou ao estoque'
+      : `📉 -${(discountPct || 0).toFixed(0)}%`;
+
+  const shareText = `🔥 ${name}\n${formatPrice(currentPrice)} (${tag})\n\nMais ofertas e cadastre seus próprios produtos: @${BOT_USERNAME}`;
+  const shareUrl  = `https://t.me/share/url?url=${encodeURIComponent(url)}&text=${encodeURIComponent(shareText)}`;
+  const botUrl    = `https://t.me/${BOT_USERNAME}`;
+
+  return {
+    inline_keyboard: [
+      [
+        { text: '📤 Compartilhar', url: shareUrl },
+        { text: '💎 Meus produtos', url: botUrl },
+      ],
+    ],
+  };
+}
+
 async function sendPriceAlert({ name, url, store, category, currentPrice, lowestPrice, lastPrice, discountPct, imageUrl, priceHistory = [], alertType = 'minimum' }) {
   const storeLabel    = escapeMarkdown(store.toUpperCase());
   const nameLabel     = escapeMarkdown(name);
@@ -148,16 +170,20 @@ async function sendPriceAlert({ name, url, store, category, currentPrice, lowest
     ].join('\n');
   }
 
+  const reply_markup = buildShareKeyboard({ name, url, currentPrice, alertType, discountPct });
+
   try {
     if (imageUrl) {
       await bot.sendPhoto(TELEGRAM_CHANNEL_ID, imageUrl, {
         caption,
         parse_mode: 'MarkdownV2',
+        reply_markup,
       });
     } else {
       await bot.sendMessage(TELEGRAM_CHANNEL_ID, caption, {
         parse_mode: 'MarkdownV2',
         disable_web_page_preview: false,
+        reply_markup,
       });
     }
     console.log(`[Telegram] Alerta enviado: ${name} — ${formatPrice(currentPrice)}`);
@@ -167,6 +193,7 @@ async function sendPriceAlert({ name, url, store, category, currentPrice, lowest
       await bot.sendMessage(TELEGRAM_CHANNEL_ID, caption, {
         parse_mode: 'MarkdownV2',
         disable_web_page_preview: false,
+        reply_markup,
       }).then(() => console.log(`[Telegram] Alerta enviado (sem foto): ${name} — ${formatPrice(currentPrice)}`))
         .catch(() => {});
     }
