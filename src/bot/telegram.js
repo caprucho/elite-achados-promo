@@ -93,13 +93,16 @@ const CATEGORY_LABELS = {
 };
 
 function buildShareKeyboard({ name, url, currentPrice, alertType, discountPct }) {
-  const tag = alertType === 'min_beat' || alertType === 'min_hit'
-    ? '🏆 menor preço já visto'
-    : alertType === 'back_in_stock'
-      ? '🟢 voltou ao estoque'
-      : `📉 -${(discountPct || 0).toFixed(0)}%`;
+  const tag = alertType === 'price_bug'
+    ? `🐛 BUG DE PREÇO -${(discountPct || 0).toFixed(0)}%`
+    : alertType === 'min_beat' || alertType === 'min_hit'
+      ? '🏆 menor preço já visto'
+      : alertType === 'back_in_stock'
+        ? '🟢 voltou ao estoque'
+        : `📉 -${(discountPct || 0).toFixed(0)}%`;
 
-  const shareText = `🔥 ${name}\n${formatPrice(currentPrice)} (${tag})\n\nMais ofertas e cadastre seus próprios produtos: @${BOT_USERNAME}`;
+  const prefix = alertType === 'price_bug' ? '🐛 BUG! Corre!' : '🔥';
+  const shareText = `${prefix} ${name}\n${formatPrice(currentPrice)} (${tag})\n\nMais ofertas e cadastre seus próprios produtos: @${BOT_USERNAME}`;
   const shareUrl  = `https://t.me/share/url?url=${encodeURIComponent(url)}&text=${encodeURIComponent(shareText)}`;
   const botUrl    = `https://t.me/${BOT_USERNAME}`;
 
@@ -156,6 +159,22 @@ async function sendPriceAlert({ name, url, store, category, currentPrice, lowest
     if (lowestPrice) lines.push(`📌 Mínimo histórico: ${escapeMarkdown(formatPrice(lowestPrice))}`);
     lines.push(``, `🛒 [Ver oferta](${url})${categoryLine}`);
     caption = lines.join('\n');
+  } else if (alertType === 'price_bug') {
+    caption = [
+      `🐛🐛🐛 *POSSÍVEL BUG DE PREÇO\\!* 🐛🐛🐛`,
+      ``,
+      `🚨 *${storeLabel}*`,
+      `📦 *${nameLabel}*`,
+      ``,
+      `💸 Preço agora: *${escapeMarkdown(formatPrice(currentPrice))}*`,
+      `💰 Preço normal: ~${escapeMarkdown(formatPrice(lastPrice))}~`,
+      `🔥 *${pctLabel}%* abaixo do preço normal`,
+      ``,
+      `⚠️ _Pode ser erro do site\\. Se for real, esgota em minutos\\._`,
+      `⚡ *CONFIRME ANTES DE FECHAR — corre\\!*`,
+      ``,
+      `🛒 [VER OFERTA AGORA](${url})${categoryLine}`,
+    ].join('\n');
   } else {
     caption = [
       `📉 *QUEDA BRUSCA DE PREÇO — ${storeLabel}*`,

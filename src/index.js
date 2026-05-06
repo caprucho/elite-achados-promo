@@ -62,7 +62,9 @@ async function processProduct(product) {
 
   // Sanity check: queda > SAFETY_DROP_PCT vs último preço = reconfirmar antes
   // de aceitar. Se a 2ª leitura confirmar o mesmo preço (±tolerância), é
-  // ofertão real; se divergir ou falhar, descartamos como erro de scraping.
+  // ofertão real / bug de preço; se divergir ou falhar, descartamos como erro
+  // de scraping.
+  let isPriceBug = false;
   if (lastPrice && lastPrice > 0 && currentPrice < lastPrice * (1 - SAFETY_DROP_PCT / 100)) {
     console.warn(`[Monitor] Queda suspeita (${name}: R$ ${currentPrice} vs R$ ${lastPrice}) — reconfirmando em ${RECHECK_DELAY_MS / 1000}s...`);
     await sleep(RECHECK_DELAY_MS);
@@ -81,12 +83,31 @@ async function processProduct(product) {
       return;
     }
 
-    console.log(`[Monitor] Queda confirmada por re-scrape — ${name}: R$ ${recheck.price}`);
+    console.log(`[Monitor] 🐛 BUG DE PREÇO confirmado — ${name}: R$ ${recheck.price} (era R$ ${lastPrice})`);
     currentPrice = recheck.price;
     imageUrl     = recheck.imageUrl || imageUrl;
+    isPriceBug = true;
   }
 
   await savePrice(id, currentPrice);
+
+  // 🐛 BUG DE PREÇO — sobrepõe a lógica padrão (queda confirmada >SAFETY_DROP_PCT)
+  if (isPriceBug) {
+    const alreadySent = await wasAlertRecentlySent(id, currentPrice);
+    if (!alreadySent) {
+      const dropPct = ((lastPrice - currentPrice) / lastPrice) * 100;
+      console.log(`[Monitor] 🐛 Enviando alerta de BUG — ${name}: ${currentPrice}`);
+      await sendPriceAlert({
+        name, url, store, category,
+        currentPrice, lastPrice, lowestPrice,
+        discountPct: dropPct,
+        imageUrl, priceHistory,
+        alertType: 'price_bug',
+      });
+      await registerAlert(id, currentPrice, dropPct);
+    }
+    return;
+  }
 
   // Alerta de volta ao estoque (prioridade máxima)
   if (wasUnavailable) {
