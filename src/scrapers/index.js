@@ -6,6 +6,7 @@ const wap          = require('./wap');
 const netshoes     = require('./netshoes');
 const farmrio      = require('./farmrio');
 const animale      = require('./animale');
+const zattini      = require('./zattini');
 
 const ROUTES = [
   { match: (h) => h.includes('mercadolivre.com'),                scraper: mercadolivre },
@@ -16,6 +17,7 @@ const ROUTES = [
   { match: (h) => h.includes('netshoes.com'),                    scraper: netshoes     },
   { match: (h) => h.includes('farmrio.com'),                     scraper: farmrio      },
   { match: (h) => h.includes('animale.com'),                     scraper: animale      },
+  { match: (h) => h.includes('zattini.com'),                     scraper: zattini      },
 ];
 
 async function getPrice(productUrl) {

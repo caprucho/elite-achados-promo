@@ -32,6 +32,7 @@ const STORE_ROUTES = [
   { match: 'dafiti.com.br',    store: 'dafiti',       label: 'Dafiti'        },
   { match: 'farmrio.com.br',   store: 'farmrio',      label: 'Farm Rio'      },
   { match: 'animale.com.br',   store: 'animale',      label: 'Animale'       },
+  { match: 'zattini.com.br',   store: 'zattini',      label: 'Zattini'       },
   { match: 'wap.ind.br',       store: 'wap',          label: 'WAP'           },
 ];
 
@@ -70,6 +71,7 @@ const SUPPORTED_LIST = [
   '• Dafiti',
   '• Farm Rio',
   '• Animale',
+  '• Zattini',
   '• WAP (loja oficial)',
   '',
   '_Para outras lojas, use_ `/sugerir <link>` _que eu avalio._',
