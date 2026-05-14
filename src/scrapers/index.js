@@ -15,7 +15,8 @@ const ROUTES = [
   // Dafiti hoje só tem <meta itemprop="price"> (sem JSON-LD Product) — jsonld.js cobre
   { match: (h) => h.includes('dafiti.com'),                      scraper: jsonld       },
   { match: (h) => h.includes('kabum.com'),                       scraper: kabum        },
-  { match: (h) => h.includes('wap.ind.br'),                      scraper: wap          },
+  // WAP usa VTEX com AggregateOffer (lowPrice) — jsonld.js cobre
+  { match: (h) => h.includes('wap.ind.br'),                      scraper: jsonld       },
   { match: (h) => h.includes('netshoes.com'),                    scraper: netshoes     },
   { match: (h) => h.includes('farmrio.com'),                     scraper: farmrio      },
   { match: (h) => h.includes('animale.com'),                     scraper: animale      },

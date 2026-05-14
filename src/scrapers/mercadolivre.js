@@ -35,12 +35,19 @@ async function getToken() {
 }
 
 function extractMlId(url) {
+  // /up/MLBU<num> — produto unificado (linha de variantes); mesmo endpoint que catálogo
+  const unified = url.match(/\/up\/(MLBU\d+)/i);
+  if (unified) return { type: 'product', id: unified[1] };
+
+  // /p/MLB<num> — catálogo
   const catalog = url.match(/\/p\/(MLB\d+)/i);
   if (catalog) return { type: 'product', id: catalog[1] };
 
+  // MLB-<num> — item direto (não-catálogo)
   const produto = url.match(/MLB-(\d+)/i);
   if (produto) return { type: 'item', id: `MLB${produto[1]}` };
 
+  // MLB<num> dentro do path (fallback)
   const item = url.match(/(MLB\d+)/i);
   if (item) return { type: 'item', id: item[1] };
 
