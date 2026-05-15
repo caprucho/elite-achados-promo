@@ -6,6 +6,21 @@ const { TELEGRAM_BOT_TOKEN, TELEGRAM_CHANNEL_ID, TELEGRAM_ADMIN_USER_ID } = proc
 const BOT_USERNAME = process.env.TELEGRAM_BOT_USERNAME || 'Elite_Achados_PromoBOT';
 const ALERT_SEND_DELAY_MS  = parseInt(process.env.ALERT_SEND_DELAY_MS  || '1500', 10);
 const ALERT_MAX_RETRIES    = parseInt(process.env.ALERT_MAX_RETRIES    || '5', 10);
+const AMAZON_AFFILIATE_TAG = process.env.AMAZON_AFFILIATE_TAG || 'elitepromo06-20';
+
+// Reescreve URL da Amazon com a tag de afiliado (Amazon Associates).
+// Toda compra a partir desse link gera comissão. Outras lojas: URL intacta.
+function withAffiliateTag(rawUrl) {
+  if (!AMAZON_AFFILIATE_TAG) return rawUrl;
+  try {
+    const u = new URL(rawUrl);
+    if (u.hostname.includes('amazon.com') || u.hostname === 'amzn.to') {
+      u.searchParams.set('tag', AMAZON_AFFILIATE_TAG);
+      return u.toString();
+    }
+  } catch {}
+  return rawUrl;
+}
 
 if (!TELEGRAM_BOT_TOKEN || !TELEGRAM_CHANNEL_ID) {
   throw new Error('TELEGRAM_BOT_TOKEN e TELEGRAM_CHANNEL_ID são obrigatórios no .env');
@@ -151,6 +166,7 @@ function buildShareKeyboard({ name, url, currentPrice, alertType, discountPct })
 }
 
 async function sendPriceAlert({ name, url, store, category, currentPrice, lowestPrice, lastPrice, discountPct, imageUrl, priceHistory = [], alertType = 'minimum' }) {
+  url = withAffiliateTag(url); // aplica tag de afiliado Amazon (no-op nas outras lojas)
   const storeLabel    = escapeMarkdown(store.toUpperCase());
   const nameLabel     = escapeMarkdown(name);
   const pctLabel      = escapeMarkdown((discountPct || 0).toFixed(1));
