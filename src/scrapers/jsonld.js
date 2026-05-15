@@ -50,12 +50,19 @@ function isOutOfStock(prod) {
 }
 
 function extractPriceFromProduct(prod) {
-  const offers = Array.isArray(prod.offers) ? prod.offers[0] : prod.offers;
-  if (!offers) return null;
-  const raw = offers.price ?? offers.lowPrice ?? offers.highPrice;
-  if (raw === undefined || raw === null) return null;
-  const price = parseFloat(String(raw).replace(',', '.'));
-  return !isNaN(price) && price > 0 ? price : null;
+  // Página pode ter múltiplas ofertas pro mesmo produto (ex: Apple AirTag tem
+  // "Pacote com 1" R$369 e "Pacote com 4" R$1249). Pegamos sempre o MENOR —
+  // é o preço de entrada ("a partir de"), e garante consistência entre scans.
+  const offersArr = Array.isArray(prod.offers) ? prod.offers : [prod.offers];
+  const prices = [];
+  for (const o of offersArr) {
+    if (!o) continue;
+    const raw = o.price ?? o.lowPrice ?? o.highPrice;
+    if (raw === undefined || raw === null) continue;
+    const p = parseFloat(String(raw).replace(',', '.'));
+    if (!isNaN(p) && p > 0) prices.push(p);
+  }
+  return prices.length ? Math.min(...prices) : null;
 }
 
 function extractPriceFromMeta(html) {

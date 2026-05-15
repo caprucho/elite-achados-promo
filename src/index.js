@@ -214,11 +214,17 @@ async function processProduct(product) {
     const priceChanges = countPriceChanges(priceHistory);
     const enoughHistory = priceChanges >= MIN_CHANGES_FOR_HISTORIC;
 
-    const alertMinBeat = enoughHistory && currentPrice < lowestPrice && discountFromMin >= MIN_BEAT_THRESHOLD;
-    const alertMinHit  = !alertMinBeat && enoughHistory && currentPrice <= lowestPrice && lastPrice !== null && lastPrice > lowestPrice;
-    const alertDrop    = !alertMinBeat && !alertMinHit && lastPrice !== null && currentPrice < lastPrice && dropFromLast >= DROP_THRESHOLD;
+    // min_beat: novo mínimo histórico. Exige cair >PRICE_CHANGE_MIN_PCT abaixo
+    // do mínimo (centavos não contam) + histórico de alterações suficiente.
+    const alertMinBeat = enoughHistory
+      && currentPrice < lowestPrice * (1 - PRICE_CHANGE_MIN_PCT / 100)
+      && discountFromMin >= MIN_BEAT_THRESHOLD;
 
-    if (alertMinBeat || alertMinHit || alertDrop) {
+    // drop: queda >DROP_THRESHOLD vs o último preço registrado.
+    const alertDrop = !alertMinBeat
+      && lastPrice !== null && currentPrice < lastPrice && dropFromLast >= DROP_THRESHOLD;
+
+    if (alertMinBeat || alertDrop) {
       const alreadySent = await wasAlertRecentlySent(id, currentPrice);
       if (alreadySent) {
         console.log(`[Monitor] Alerta já enviado recentemente — ${name}`);
@@ -228,10 +234,6 @@ async function processProduct(product) {
             await sendPriceAlert({ name, url, store, category, currentPrice, lowestPrice, discountPct: discountFromMin, imageUrl, priceHistory, alertType: 'min_beat' });
             await registerAlert(id, currentPrice, discountFromMin);
             recordAlert('min_beat');
-          } else if (alertMinHit) {
-            await sendPriceAlert({ name, url, store, category, currentPrice, lowestPrice, discountPct: 0, imageUrl, priceHistory, alertType: 'min_hit' });
-            await registerAlert(id, currentPrice, 0);
-            recordAlert('min_hit');
           } else {
             await sendPriceAlert({ name, url, store, category, currentPrice, lastPrice, discountPct: dropFromLast, imageUrl, priceHistory, alertType: 'drop' });
             await registerAlert(id, currentPrice, dropFromLast);

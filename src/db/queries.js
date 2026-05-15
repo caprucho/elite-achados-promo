@@ -1,5 +1,11 @@
 const { supabase } = require('./supabase');
 
+// Dedup de alertas: não re-alertar o mesmo produto num preço ~igual dentro
+// da janela. Janela longa (7 dias) + tolerância (2%) mata o flood de produto
+// parado em promoção e de oscilação de centavos.
+const ALERT_DEDUP_HOURS         = parseInt(process.env.ALERT_DEDUP_HOURS || '168', 10);
+const ALERT_DEDUP_TOLERANCE_PCT = parseFloat(process.env.ALERT_DEDUP_TOLERANCE_PCT || '2');
+
 async function getActiveProducts() {
   const { data, error } = await supabase
     .from('products')
@@ -68,23 +74,25 @@ async function getLastPrice(productId) {
   return data?.price ?? null;
 }
 
-async function wasAlertRecentlySent(productId, price, windowHours = 24) {
+async function wasAlertRecentlySent(productId, price, windowHours = ALERT_DEDUP_HOURS) {
   const since = new Date(Date.now() - windowHours * 60 * 60 * 1000).toISOString();
 
   const { data, error } = await supabase
     .from('alerts_sent')
-    .select('id')
+    .select('price')
     .eq('product_id', productId)
-    .eq('price', price)
-    .gte('sent_at', since)
-    .limit(1)
-    .single();
+    .gte('sent_at', since);
 
-  if (error && error.code !== 'PGRST116') {
+  if (error) {
     console.error(`[wasAlertRecentlySent] Erro para produto ${productId}:`, error.message);
+    return false;
   }
+  if (!data || data.length === 0) return false;
 
-  return !!data;
+  // "Já alertado" se houver alerta recente com preço dentro da tolerância —
+  // assim variação de centavos não burla o dedup.
+  const tol = ALERT_DEDUP_TOLERANCE_PCT / 100;
+  return data.some((a) => price > 0 && Math.abs(a.price - price) / price <= tol);
 }
 
 async function registerAlert(productId, price, discountPct) {
