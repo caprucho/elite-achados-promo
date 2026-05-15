@@ -204,6 +204,32 @@ async function clearUnavailableAlertSent(productId) {
   if (error) console.error('[clearUnavailableAlertSent]', error.message);
 }
 
+async function getNextShowcaseProduct(store) {
+  // Próximo da fila: ativo, da loja, com last_showcased_at mais antigo
+  // (nunca postado vem primeiro). Rotação circular natural.
+  const { data, error } = await supabase
+    .from('products')
+    .select('id, name, url, store, category')
+    .eq('store', store)
+    .eq('active', true)
+    .order('last_showcased_at', { ascending: true, nullsFirst: true })
+    .limit(1)
+    .maybeSingle();
+  if (error) {
+    console.error('[getNextShowcaseProduct] Erro:', error.message);
+    return null;
+  }
+  return data || null;
+}
+
+async function markShowcased(productId) {
+  const { error } = await supabase
+    .from('products')
+    .update({ last_showcased_at: new Date().toISOString() })
+    .eq('id', productId);
+  if (error) console.error('[markShowcased] Erro:', error.message);
+}
+
 async function getUnavailableProducts() {
   const products = await getActiveProducts();
   const enriched = await Promise.all(products.map(async (p) => {
@@ -456,4 +482,6 @@ module.exports = {
   markUnavailableAlertSent,
   clearUnavailableAlertSent,
   getUnavailableProducts,
+  getNextShowcaseProduct,
+  markShowcased,
 };

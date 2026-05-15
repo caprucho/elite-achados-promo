@@ -333,6 +333,15 @@ async function main() {
   // Agenda resumo diário ao admin (DM com stats das últimas 24h)
   scheduleDailySummary();
 
+  // Agenda a vitrine rotativa (achadinhos Amazon — gera tráfego de afiliado)
+  if (process.env.ENABLE_SHOWCASE !== 'false') {
+    try {
+      require('./showcase').scheduleShowcase();
+    } catch (err) {
+      console.warn('[Monitor] Vitrine não iniciada:', err.message);
+    }
+  }
+
   await runScan();
 
   const schedule = () => setTimeout(async () => {

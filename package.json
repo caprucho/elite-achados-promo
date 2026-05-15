@@ -4,7 +4,8 @@
     "commands": "node src/commands.js",
     "seed": "node scripts/seed.js",
     "add": "node scripts/addProduct.js",
-    "weekly": "node src/weekly.js"
+    "weekly": "node src/weekly.js",
+    "refresh-amazon": "node scripts/refresh-amazon.js"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.105.3",

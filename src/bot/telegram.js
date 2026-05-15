@@ -292,6 +292,49 @@ async function sendPriceAlert({ name, url, store, category, currentPrice, lowest
   }
 }
 
+// Card de vitrine — indicação de produto (não é alerta de queda).
+// Usado pela rotação de produtos Amazon pra gerar tráfego de afiliado.
+async function sendShowcase({ name, url, store, category, price, imageUrl }) {
+  url = withAffiliateTag(url);
+  const storeLabel = escapeMarkdown(store.toUpperCase());
+  const nameLabel  = escapeMarkdown(name);
+  const safeUrl    = escapeMdUrl(url);
+  const categoryLine = category && CATEGORY_LABELS[category]
+    ? `\n🗂️ _${escapeMarkdown(CATEGORY_LABELS[category])}_`
+    : '';
+
+  const caption = [
+    `🛒 *ACHADINHO — ${storeLabel}*`,
+    ``,
+    `📦 *${nameLabel}*`,
+    ``,
+    `💰 *${escapeMarkdown(formatPrice(price))}*`,
+    `_Preço de referência — confira o valor atual na página\\._`,
+    ``,
+    `🛍️ [Ver na loja](${safeUrl})${categoryLine}`,
+  ].join('\n');
+
+  const reply_markup = {
+    inline_keyboard: [[
+      { text: '🛍️ Ver oferta', url },
+      { text: '💎 Monitorar produto', url: `https://t.me/${BOT_USERNAME}` },
+    ]],
+  };
+
+  try {
+    if (imageUrl) {
+      await tgSend('sendPhoto', TELEGRAM_CHANNEL_ID, imageUrl, { caption, parse_mode: 'MarkdownV2', reply_markup });
+    } else {
+      await tgSend('sendMessage', TELEGRAM_CHANNEL_ID, caption, { parse_mode: 'MarkdownV2', disable_web_page_preview: false, reply_markup });
+    }
+    console.log(`[Telegram] Achadinho enviado: ${name} — ${formatPrice(price)}`);
+    return true;
+  } catch (err) {
+    console.error('[Telegram] Erro ao enviar achadinho:', err.message);
+    return false;
+  }
+}
+
 async function sendAdminMessage(text, opts = {}) {
   if (!TELEGRAM_ADMIN_USER_ID) {
     console.warn('[Telegram] TELEGRAM_ADMIN_USER_ID não configurado — pulando notificação admin');
@@ -304,4 +347,4 @@ async function sendAdminMessage(text, opts = {}) {
   }
 }
 
-module.exports = { sendPriceAlert, sendAdminMessage };
+module.exports = { sendPriceAlert, sendAdminMessage, sendShowcase };
