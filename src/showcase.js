@@ -1,15 +1,24 @@
-// Vitrine rotativa — posta produtos de uma loja no canal em horários fixos.
+// Vitrine rotativa — posta produtos de uma loja no canal em horários
+// ALEATÓRIOS dentro de uma janela diária (default: 5x/dia entre 09h-22h BRT).
 // Uso atual: produtos Amazon (o scraping da Amazon é bloqueado no Railway,
 // então a vitrine usa o último preço salvo no banco — atualizado pelo
 // script local scripts/refresh-amazon.js).
 const { getNextShowcaseProduct, markShowcased, getLastPrice } = require('./db/queries');
 const { sendShowcase } = require('./bot/telegram');
 
-const SHOWCASE_STORE = process.env.SHOWCASE_STORE || 'amazon';
-// Horários UTC dos posts (default: 10h,13h,16h,19h,22h BRT = 13,16,19,22,1 UTC)
-const SHOWCASE_HOURS_UTC = (process.env.SHOWCASE_HOURS_UTC || '13,16,19,22,1')
-  .split(',').map((h) => parseInt(h.trim(), 10)).filter((h) => h >= 0 && h <= 23)
-  .sort((a, b) => a - b);
+const SHOWCASE_STORE       = process.env.SHOWCASE_STORE || 'amazon';
+const SHOWCASE_COUNT       = parseInt(process.env.SHOWCASE_COUNT || '5', 10);
+const SHOWCASE_START_BRT   = parseInt(process.env.SHOWCASE_START_BRT || '9', 10);  // 09h
+const SHOWCASE_END_BRT     = parseInt(process.env.SHOWCASE_END_BRT || '22', 10);   // 22h
+
+// Brasil é UTC-3 (sem horário de verão). Converte um minuto-do-dia em BRT
+// no Date (UTC absoluto) correspondente a HOJE no fuso de Brasília.
+function brtMinuteToDate(brtMinute) {
+  const now = new Date();
+  const brtNow = new Date(now.getTime() - 3 * 3600 * 1000);
+  const y = brtNow.getUTCFullYear(), mo = brtNow.getUTCMonth(), d = brtNow.getUTCDate();
+  return new Date(Date.UTC(y, mo, d, 0, brtMinute, 0) + 3 * 3600 * 1000);
+}
 
 async function postOne() {
   try {
@@ -21,7 +30,6 @@ async function postOne() {
 
     const price = await getLastPrice(product.id);
     if (!price || price <= 0) {
-      // Sem preço no histórico — marca como mostrado pra não travar a fila
       console.warn(`[Showcase] ${product.name} sem preço no banco — pulando (rode refresh-amazon)`);
       await markShowcased(product.id);
       return;
@@ -33,7 +41,7 @@ async function postOne() {
       store: product.store,
       category: product.category,
       price,
-      imageUrl: null, // imagem opcional; o link já gera preview
+      imageUrl: null,
     });
 
     if (sent) {
@@ -45,32 +53,43 @@ async function postOne() {
   }
 }
 
-function msUntilNextSlot() {
-  const now = new Date();
-  const nowH = now.getUTCHours();
-  // Acha a próxima hora da lista (hoje ou amanhã)
-  let target = new Date(now);
-  let slot = SHOWCASE_HOURS_UTC.find((h) => h > nowH);
-  if (slot === undefined) {
-    // Passou de todos os horários hoje — primeiro slot de amanhã
-    slot = SHOWCASE_HOURS_UTC[0];
-    target.setUTCDate(target.getUTCDate() + 1);
+// Planeja os posts de hoje: N horários aleatórios únicos na janela BRT.
+// Reagenda a si mesmo logo após a meia-noite BRT pra planejar o dia seguinte.
+function planDay() {
+  const startMin = SHOWCASE_START_BRT * 60;
+  const endMin   = SHOWCASE_END_BRT * 60;
+
+  const slots = new Set();
+  let guard = 0;
+  while (slots.size < SHOWCASE_COUNT && guard++ < 1000) {
+    slots.add(startMin + Math.floor(Math.random() * (endMin - startMin + 1)));
   }
-  target.setUTCHours(slot, 0, 0, 0);
-  return target.getTime() - now.getTime();
+  const sorted = [...slots].sort((a, b) => a - b);
+
+  const now = Date.now();
+  let scheduled = 0;
+  const horarios = [];
+  for (const min of sorted) {
+    const when = brtMinuteToDate(min).getTime();
+    if (when <= now) continue; // horário já passou hoje
+    setTimeout(postOne, when - now);
+    horarios.push(`${String(Math.floor(min / 60)).padStart(2, '0')}:${String(min % 60).padStart(2, '0')}`);
+    scheduled++;
+  }
+  console.log(`[Showcase] ${scheduled} achadinho(s) hoje (BRT): ${horarios.join(', ') || '(nenhum — janela já passou)'}`);
+
+  // Replaneja logo após a próxima meia-noite BRT
+  const nextPlan = brtMinuteToDate(0).getTime() + 24 * 3600 * 1000 + 2 * 60 * 1000 - now;
+  setTimeout(planDay, nextPlan);
 }
 
 function scheduleShowcase() {
-  if (!SHOWCASE_HOURS_UTC.length) {
-    console.warn('[Showcase] SHOWCASE_HOURS_UTC vazio — vitrine desativada');
+  if (SHOWCASE_COUNT < 1) {
+    console.warn('[Showcase] SHOWCASE_COUNT < 1 — vitrine desativada');
     return;
   }
-  const delay = msUntilNextSlot();
-  console.log(`[Showcase] Próximo post em ${(delay / 3600000).toFixed(1)}h (loja: ${SHOWCASE_STORE}, ${SHOWCASE_HOURS_UTC.length}x/dia)`);
-  setTimeout(async () => {
-    await postOne();
-    scheduleShowcase();
-  }, delay);
+  console.log(`[Showcase] Vitrine ativa: ${SHOWCASE_COUNT}x/dia, ${SHOWCASE_START_BRT}h-${SHOWCASE_END_BRT}h BRT, loja: ${SHOWCASE_STORE}`);
+  planDay();
 }
 
 module.exports = { scheduleShowcase, postOne };
