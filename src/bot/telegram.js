@@ -335,6 +335,52 @@ async function sendShowcase({ name, url, store, category, price, imageUrl }) {
   }
 }
 
+// Card de oferta com cupom — usado pela rotina de cupons da KaBuM.
+async function sendCouponDeal({ name, url, price, oldPrice, discountPct, stock, coupon, couponDiscount, image }) {
+  const nameLabel = escapeMarkdown(name);
+  const safeUrl   = escapeMdUrl(url);
+
+  const lines = [
+    `🎟️ *CUPOM KABUM*`,
+    ``,
+    `📦 *${nameLabel}*`,
+    ``,
+    `💰 *${escapeMarkdown(formatPrice(price))}*`,
+  ];
+  if (oldPrice && oldPrice > price) {
+    lines.push(`📉 De ~${escapeMarkdown(formatPrice(oldPrice))}~ \\(${escapeMarkdown((discountPct || 0).toFixed(0))}% OFF\\)`);
+  }
+  lines.push(
+    ``,
+    `🎟️ Cupom: \`${escapeMarkdown(coupon)}\``,
+    `💸 ${escapeMarkdown(couponDiscount || 'desconto extra no checkout')}`,
+    ``,
+    `🛒 [Ver produto](${safeUrl})`,
+    `_Use o cupom no carrinho antes de fechar a compra\\._`,
+  );
+  const caption = lines.join('\n');
+
+  const reply_markup = {
+    inline_keyboard: [[
+      { text: '🛒 Ver oferta', url },
+      { text: '📤 Compartilhar', url: `https://t.me/share/url?url=${encodeURIComponent(url)}&text=${encodeURIComponent(`🎟️ ${name} — cupom ${coupon} no @${BOT_USERNAME}`)}` },
+    ]],
+  };
+
+  try {
+    if (image) {
+      await tgSend('sendPhoto', TELEGRAM_CHANNEL_ID, image, { caption, parse_mode: 'MarkdownV2', reply_markup });
+    } else {
+      await tgSend('sendMessage', TELEGRAM_CHANNEL_ID, caption, { parse_mode: 'MarkdownV2', disable_web_page_preview: false, reply_markup });
+    }
+    console.log(`[Telegram] Cupom enviado: ${name} — ${coupon}`);
+    return true;
+  } catch (err) {
+    console.error('[Telegram] Erro ao enviar cupom:', err.message);
+    return false;
+  }
+}
+
 async function sendAdminMessage(text, opts = {}) {
   if (!TELEGRAM_ADMIN_USER_ID) {
     console.warn('[Telegram] TELEGRAM_ADMIN_USER_ID não configurado — pulando notificação admin');
@@ -347,4 +393,4 @@ async function sendAdminMessage(text, opts = {}) {
   }
 }
 
-module.exports = { sendPriceAlert, sendAdminMessage, sendShowcase };
+module.exports = { sendPriceAlert, sendAdminMessage, sendShowcase, sendCouponDeal };

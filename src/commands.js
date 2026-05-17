@@ -124,6 +124,7 @@ function helpMessage(admin) {
       '👑 *Admin*',
       '`/listarprodutos` — todos os ativos',
       '`/indisponiveis` — produtos em backoff',
+      '`/postarcupons` — posta cupons KaBuM no canal',
       '`/sugestoes` — pendentes',
       '`/aprovarsugestao <id>`',
       '`/rejeitarsugestao <id>`',
@@ -385,6 +386,23 @@ bot.onText(/^\/listarprodutos\b/, async (msg) => {
   if (block.trim()) await reply(msg, block);
 });
 
+// ── ADMIN: /postarcupons ─────────────────────────────────────────────────────
+bot.onText(/^\/postarcupons\b/, async (msg) => {
+  if (!isAdmin(msg)) return;
+  await reply(msg, '⏳ Varrendo cupons da KaBuM... (pode levar 1-2 min)');
+  try {
+    const { runKabumCupons } = require('./kabumCupons');
+    const r = await runKabumCupons();
+    if (r.error) {
+      await reply(msg, `❌ Erro: ${r.error}`);
+    } else {
+      await reply(msg, `✅ ${r.posted} produto(s) postado(s) no canal.\n${r.candidatos || 0} válidos de ${r.cupons || 0} cupom(ns).`);
+    }
+  } catch (err) {
+    await reply(msg, `❌ Erro: ${err.message}`);
+  }
+});
+
 // ── ADMIN: /indisponiveis ────────────────────────────────────────────────────
 bot.onText(/^\/indisponiveis\b/, async (msg) => {
   if (!isAdmin(msg)) return;
@@ -468,6 +486,7 @@ const ADMIN_COMMANDS = [
   ...PUBLIC_COMMANDS,
   { command: 'listarprodutos',    description: '[admin] Listar todos os produtos ativos' },
   { command: 'indisponiveis',     description: '[admin] Listar produtos em backoff' },
+  { command: 'postarcupons',      description: '[admin] Postar cupons KaBuM no canal agora' },
   { command: 'sugestoes',         description: '[admin] Ver sugestões pendentes' },
   { command: 'aprovarsugestao',   description: '[admin] Aprovar sugestão pelo ID' },
   { command: 'rejeitarsugestao',  description: '[admin] Rejeitar sugestão pelo ID' },

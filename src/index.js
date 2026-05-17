@@ -342,6 +342,15 @@ async function main() {
     }
   }
 
+  // Agenda a rotina de cupons da KaBuM (1x/dia)
+  if (process.env.ENABLE_KABUM_CUPONS !== 'false') {
+    try {
+      require('./kabumCupons').scheduleKabumCupons();
+    } catch (err) {
+      console.warn('[Monitor] Cupons KaBuM não iniciados:', err.message);
+    }
+  }
+
   await runScan();
 
   const schedule = () => setTimeout(async () => {
