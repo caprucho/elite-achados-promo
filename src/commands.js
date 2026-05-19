@@ -125,6 +125,7 @@ function helpMessage(admin) {
       '`/listarprodutos` — todos os ativos',
       '`/indisponiveis` — produtos em backoff',
       '`/postarcupons` — posta cupons KaBuM no canal',
+      '`/topsemana` — posta TOP 5 semanal no canal',
       '`/sugestoes` — pendentes',
       '`/aprovarsugestao <id>`',
       '`/rejeitarsugestao <id>`',
@@ -386,6 +387,19 @@ bot.onText(/^\/listarprodutos\b/, async (msg) => {
   if (block.trim()) await reply(msg, block);
 });
 
+// ── ADMIN: /topsemana ────────────────────────────────────────────────────────
+bot.onText(/^\/topsemana\b/, async (msg) => {
+  if (!isAdmin(msg)) return;
+  await reply(msg, '⏳ Montando TOP da semana...');
+  try {
+    const { runWeeklyTop } = require('./weeklyTop');
+    await runWeeklyTop();
+    await reply(msg, '✅ TOP semanal postado (se houve quedas relevantes).');
+  } catch (err) {
+    await reply(msg, `❌ Erro: ${err.message}`);
+  }
+});
+
 // ── ADMIN: /postarcupons ─────────────────────────────────────────────────────
 bot.onText(/^\/postarcupons\b/, async (msg) => {
   if (!isAdmin(msg)) return;
@@ -487,6 +501,7 @@ const ADMIN_COMMANDS = [
   { command: 'listarprodutos',    description: '[admin] Listar todos os produtos ativos' },
   { command: 'indisponiveis',     description: '[admin] Listar produtos em backoff' },
   { command: 'postarcupons',      description: '[admin] Postar cupons KaBuM no canal agora' },
+  { command: 'topsemana',         description: '[admin] Postar TOP da semana no canal agora' },
   { command: 'sugestoes',         description: '[admin] Ver sugestões pendentes' },
   { command: 'aprovarsugestao',   description: '[admin] Aprovar sugestão pelo ID' },
   { command: 'rejeitarsugestao',  description: '[admin] Rejeitar sugestão pelo ID' },

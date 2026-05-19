@@ -136,8 +136,11 @@ const CATEGORY_LABELS = {
   acessorios:  '💎 Acessórios',
   hardware:    '🖥️ Hardware',
   eletronicos: '⚡ Eletrônicos',
+  smartphones: '📱 Smartphones',
+  audio:       '🎧 Áudio',
   casa:        '🏠 Casa',
   beleza:      '💄 Beleza',
+  perfumaria:  '🌸 Perfumaria',
   esporte:     '⚽ Esporte',
 };
 
@@ -425,6 +428,50 @@ async function sendBackInStockDigest(items) {
   }
 }
 
+// TOP da semana — post fixo dominical com as maiores quedas dos últimos 7d.
+// Recebe [{ product: {name, url, store}, currentPrice, weekStartPrice, dropPct }]
+async function sendWeeklyTop(items) {
+  if (!items || !items.length) return false;
+  const lines = ['🏆 *TOP OFERTAS DA SEMANA*', '_As maiores quedas dos últimos 7 dias_', ''];
+
+  let i = 1;
+  for (const it of items) {
+    const url      = withAffiliateTag(it.product.url);
+    const name     = escapeMarkdown(it.product.name);
+    const store    = escapeMarkdown((it.product.store || '').toUpperCase());
+    const safeUrl  = escapeMdUrl(url);
+    const current  = escapeMarkdown(formatPrice(it.currentPrice));
+    const before   = escapeMarkdown(formatPrice(it.weekStartPrice));
+    const pct      = escapeMarkdown(it.dropPct.toFixed(0));
+    lines.push(`*${i}\\.* [${name}](${safeUrl})`);
+    lines.push(`   _${store}_ — *${current}* \\(de ~${before}~, *\\-${pct}%*\\)`);
+    lines.push('');
+    i++;
+  }
+
+  lines.push(`💎 *Quer alerta no SEU produto?*`);
+  lines.push(`Chama o @${BOT_USERNAME} e use \`/addproduto <link>\``);
+
+  const reply_markup = {
+    inline_keyboard: [[
+      { text: '💎 Cadastrar meus produtos', url: `https://t.me/${BOT_USERNAME}` },
+    ]],
+  };
+
+  try {
+    await tgSend('sendMessage', TELEGRAM_CHANNEL_ID, lines.join('\n'), {
+      parse_mode: 'MarkdownV2',
+      disable_web_page_preview: true,
+      reply_markup,
+    });
+    console.log(`[Telegram] TOP semanal enviado: ${items.length} item(s)`);
+    return true;
+  } catch (err) {
+    console.error('[Telegram] Erro ao enviar TOP semanal:', err.message);
+    return false;
+  }
+}
+
 async function sendAdminMessage(text, opts = {}) {
   if (!TELEGRAM_ADMIN_USER_ID) {
     console.warn('[Telegram] TELEGRAM_ADMIN_USER_ID não configurado — pulando notificação admin');
@@ -437,4 +484,4 @@ async function sendAdminMessage(text, opts = {}) {
   }
 }
 
-module.exports = { sendPriceAlert, sendAdminMessage, sendShowcase, sendCouponDeal, sendBackInStockDigest };
+module.exports = { sendPriceAlert, sendAdminMessage, sendShowcase, sendCouponDeal, sendBackInStockDigest, sendWeeklyTop };

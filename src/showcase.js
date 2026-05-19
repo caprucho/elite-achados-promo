@@ -76,6 +76,23 @@ function planDay() {
     horarios.push(`${String(Math.floor(min / 60)).padStart(2, '0')}:${String(min % 60).padStart(2, '0')}`);
     scheduled++;
   }
+
+  // Fallback: se nada foi agendado (boot tardio) mas ainda há janela hoje,
+  // garante pelo menos 1 post 5-15 min depois — assim o dia não passa em
+  // branco quando o Railway reinicia à noite.
+  if (scheduled === 0) {
+    const brtNow = new Date(now - 3 * 3600 * 1000);
+    const brtNowMin = brtNow.getUTCHours() * 60 + brtNow.getUTCMinutes();
+    if (brtNowMin < endMin) {
+      const offsetMin = 5 + Math.floor(Math.random() * 10);
+      const fallbackMin = Math.min(brtNowMin + offsetMin, endMin);
+      const when = brtMinuteToDate(fallbackMin).getTime();
+      setTimeout(postOne, Math.max(when - now, 1000));
+      horarios.push(`${String(Math.floor(fallbackMin / 60)).padStart(2, '0')}:${String(fallbackMin % 60).padStart(2, '0')} (fallback)`);
+      scheduled = 1;
+    }
+  }
+
   console.log(`[Showcase] ${scheduled} achadinho(s) hoje (BRT): ${horarios.join(', ') || '(nenhum — janela já passou)'}`);
 
   // Replaneja logo após a próxima meia-noite BRT

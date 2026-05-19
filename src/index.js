@@ -227,7 +227,18 @@ async function processProduct(product) {
     const alertDrop = !alertMinBeat
       && lastPrice !== null && currentPrice < lastPrice && dropFromLast >= DROP_THRESHOLD;
 
-    if (alertMinBeat || alertDrop) {
+    // min_hit: voltou ao mínimo histórico (não é novo recorde, mas é momento
+    // bom de comprar). Exige que o último preço tenha estado >2% acima do mín
+    // (pra evitar disparar enquanto o preço fica parado no mínimo).
+    const hitMin = !alertMinBeat && !alertDrop
+      && enoughHistory
+      && lowestPrice > 0
+      && currentPrice >= lowestPrice * 0.995 && currentPrice <= lowestPrice * 1.005
+      && lastPrice !== null && lastPrice > lowestPrice * 1.02;
+
+    const alertType = alertMinBeat ? 'min_beat' : alertDrop ? 'drop' : hitMin ? 'min_hit' : null;
+
+    if (alertType) {
       const alreadySent = await wasAlertRecentlySent(id, currentPrice);
       const inCooldown  = await isInAdaptiveCooldown(id);
       if (alreadySent) {
@@ -235,18 +246,15 @@ async function processProduct(product) {
       } else if (inCooldown) {
         console.log(`[Monitor] 🔇 Cooldown adaptativo (3+ alertas/7d) — ${name}`);
       } else {
+        const discountPct = alertType === 'min_beat' ? discountFromMin
+                          : alertType === 'drop'     ? dropFromLast
+                          : 0;
         try {
-          if (alertMinBeat) {
-            await sendPriceAlert({ name, url, store, category, currentPrice, lowestPrice, discountPct: discountFromMin, imageUrl, priceHistory, alertType: 'min_beat' });
-            await registerAlert(id, currentPrice, discountFromMin);
-            recordAlert('min_beat');
-          } else {
-            await sendPriceAlert({ name, url, store, category, currentPrice, lastPrice, discountPct: dropFromLast, imageUrl, priceHistory, alertType: 'drop' });
-            await registerAlert(id, currentPrice, dropFromLast);
-            recordAlert('drop');
-          }
+          await sendPriceAlert({ name, url, store, category, currentPrice, lastPrice, lowestPrice, discountPct, imageUrl, priceHistory, alertType });
+          await registerAlert(id, currentPrice, discountPct);
+          recordAlert(alertType);
         } catch (err) {
-          console.error(`[Monitor] Alerta drop/min falhou — ${name}:`, err.message);
+          console.error(`[Monitor] Alerta ${alertType} falhou — ${name}:`, err.message);
         }
       }
     }
@@ -360,6 +368,15 @@ async function main() {
       require('./kabumCupons').scheduleKabumCupons();
     } catch (err) {
       console.warn('[Monitor] Cupons KaBuM não iniciados:', err.message);
+    }
+  }
+
+  // Agenda o TOP semanal (domingo 10h BRT)
+  if (process.env.ENABLE_WEEKLY_TOP !== 'false') {
+    try {
+      require('./weeklyTop').scheduleWeeklyTop();
+    } catch (err) {
+      console.warn('[Monitor] TOP semanal não iniciado:', err.message);
     }
   }
 
