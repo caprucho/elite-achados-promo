@@ -15,7 +15,9 @@ const CUPONS_COUNT      = parseInt(process.env.KABUM_CUPONS_COUNT || '5', 10);  
 const CUPONS_MIN_STOCK  = parseInt(process.env.KABUM_CUPONS_MIN_STOCK || '5', 10); // estoque mínimo
 const CUPONS_MIN_DISC   = parseFloat(process.env.KABUM_CUPONS_MIN_DISCOUNT || '5'); // % desconto mínimo
 const CUPONS_MAX_PROMOS = parseInt(process.env.KABUM_CUPONS_MAX_PROMOS || '15', 10); // máx de cupons a varrer
-const CUPONS_HOUR_UTC   = parseInt(process.env.KABUM_CUPONS_HOUR_UTC || '14', 10);   // 11h BRT
+// Horários BRT em que a rotina dispara (vírgula-separados). Default: 13h e 19h.
+const CUPONS_HOURS_BRT  = (process.env.KABUM_CUPONS_HOURS_BRT || '13,19')
+  .split(',').map((h) => parseInt(h.trim(), 10)).filter((h) => !isNaN(h) && h >= 0 && h <= 23);
 
 // Peças de reposição + acessórios — produto de verdade não casa com isso.
 const JUNK_RE = /\b(cabo|cabos|adaptador|suporte|p[ée]licula|pel[íi]cula|m[óo]dulo|conector|flex|carca[çc]a|dock|hub|organizador|extensor|r[ée]gua de|filtro de linha|espelho|pulseira|carregador|bateria para|fonte para notebook|mouse ?pad|base para notebook|tela para|display para|touch para|protetor de tela|limpa ?tela|kit limpeza|cooler para notebook)\b/i;
@@ -145,13 +147,27 @@ async function runKabumCupons() {
   return { posted, candidatos: candidatos.length, cupons: cupons.length };
 }
 
+// Agenda a próxima rodada no próximo horário BRT da lista (re-agenda a si mesmo).
 function scheduleKabumCupons() {
-  const now = new Date();
-  const target = new Date(now);
-  target.setUTCHours(CUPONS_HOUR_UTC, 0, 0, 0);
-  if (target <= now) target.setUTCDate(target.getUTCDate() + 1);
-  const delay = target.getTime() - now.getTime();
-  console.log(`[Cupons] Próxima rodada automática em ${(delay / 3600000).toFixed(1)}h`);
+  if (!CUPONS_HOURS_BRT.length) {
+    console.warn('[Cupons] KABUM_CUPONS_HOURS_BRT vazio — rotina desativada');
+    return;
+  }
+  const now = Date.now();
+  // BRT = UTC-3. Pra um horário H em BRT hoje, o instante UTC é H+3.
+  const candidates = [];
+  for (const h of CUPONS_HOURS_BRT) {
+    const hUtc = (h + 3) % 24;
+    const d = new Date();
+    d.setUTCHours(hUtc, 0, 0, 0);
+    let t = d.getTime();
+    if (t <= now) t += 24 * 3600 * 1000;
+    candidates.push(t);
+  }
+  const next = Math.min(...candidates);
+  const delay = next - now;
+  const hStr = CUPONS_HOURS_BRT.map((h) => `${h}h`).join(', ');
+  console.log(`[Cupons] Horários BRT: ${hStr} — próxima rodada em ${(delay / 3600000).toFixed(1)}h`);
   setTimeout(async () => {
     try { await runKabumCupons(); } catch (err) { console.error('[Cupons]', err.message); }
     scheduleKabumCupons();
