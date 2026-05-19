@@ -1,9 +1,10 @@
 require('dotenv').config();
-const { getActiveProducts, savePrice, getLowestPrice, getLastPrice, wasAlertRecentlySent, registerAlert, getPriceHistory, saveUnavailable, getConsecutiveUnavailableCount, getLastScanAt, getUnavailableStreakStart, wasUnavailableAlertSent, markUnavailableAlertSent, clearUnavailableAlertSent } = require('./db/queries');
+const { getActiveProducts, savePrice, getLowestPrice, getLastPrice, wasAlertRecentlySent, registerAlert, getPriceHistory, saveUnavailable, getConsecutiveUnavailableCount, getLastScanAt, getUnavailableStreakStart, wasUnavailableAlertSent, markUnavailableAlertSent, clearUnavailableAlertSent, isInAdaptiveCooldown } = require('./db/queries');
 const { getPrice }       = require('./scrapers');
 const { sendPriceAlert, sendAdminMessage } = require('./bot/telegram');
 const { closeBrowser }   = require('./scrapers/browser');
 const { notifyError, recordAlert, recordScan, recordProduct, scheduleDailySummary } = require('./utils/adminAlerts');
+const { enqueueBackInStock, scheduleBackInStockDigest } = require('./backInStockDigest');
 
 // Auto-inicia o bot interativo (polling) no mesmo processo, exceto em modo cron
 // ou se explicitamente desligado. Set ENABLE_BOT_COMMANDS=false se rodar como
@@ -190,15 +191,17 @@ async function processProduct(product) {
   } else if (wasUnavailable && lowestPrice !== null) {
     await clearUnavailableAlertSent(id);
     const alreadySent = await wasAlertRecentlySent(id, currentPrice);
-    if (!alreadySent) {
-      console.log(`[Monitor] Produto voltou ao estoque — ${name}: ${currentPrice}`);
-      try {
-        await sendPriceAlert({ name, url, store, category, currentPrice, lowestPrice, imageUrl, priceHistory, alertType: 'back_in_stock' });
-        await registerAlert(id, currentPrice, 0);
-        recordAlert('back_in_stock');
-      } catch (err) {
-        console.error(`[Monitor] Alerta back_in_stock falhou — ${name}:`, err.message);
-      }
+    const inCooldown  = await isInAdaptiveCooldown(id);
+    if (alreadySent) {
+      console.log(`[Monitor] back_in_stock dedup — ${name}`);
+    } else if (inCooldown) {
+      console.log(`[Monitor] 🔇 back_in_stock em cooldown — ${name}`);
+    } else {
+      console.log(`[Monitor] Produto voltou ao estoque — ${name}: ${currentPrice} (enfileirado p/ digest)`);
+      enqueueBackInStock({ id, name, url, store, category, price: currentPrice, lowestPrice });
+      // Registra no alerts_sent (mesmo no digest) pra dedup e cooldown funcionarem
+      await registerAlert(id, currentPrice, 0);
+      recordAlert('back_in_stock');
     }
   } else if (lowestPrice === null) {
     console.log(`[Monitor] Primeiro registro disponível — ${name}: ${currentPrice}`);
@@ -226,8 +229,11 @@ async function processProduct(product) {
 
     if (alertMinBeat || alertDrop) {
       const alreadySent = await wasAlertRecentlySent(id, currentPrice);
+      const inCooldown  = await isInAdaptiveCooldown(id);
       if (alreadySent) {
         console.log(`[Monitor] Alerta já enviado recentemente — ${name}`);
+      } else if (inCooldown) {
+        console.log(`[Monitor] 🔇 Cooldown adaptativo (3+ alertas/7d) — ${name}`);
       } else {
         try {
           if (alertMinBeat) {
@@ -332,6 +338,12 @@ async function main() {
 
   // Agenda resumo diário ao admin (DM com stats das últimas 24h)
   scheduleDailySummary();
+
+  // Agenda digest de "voltou ao estoque" (1x/dia às 15h BRT, consolidado)
+  if (process.env.ENABLE_BACK_IN_STOCK_DIGEST !== 'false') {
+    try { scheduleBackInStockDigest(); }
+    catch (err) { console.warn('[Monitor] Digest back_in_stock não iniciado:', err.message); }
+  }
 
   // Agenda a vitrine rotativa (achadinhos Amazon — gera tráfego de afiliado)
   if (process.env.ENABLE_SHOWCASE !== 'false') {

@@ -381,6 +381,50 @@ async function sendCouponDeal({ name, url, price, oldPrice, discountPct, stock, 
   }
 }
 
+// Digest consolidado de produtos que voltaram ao estoque (postado 1x/dia).
+// Recebe uma lista [{ name, url, store, price, lowestPrice }] e monta uma
+// única mensagem com tudo. Sem foto (telegram caption tem limite de 1024 chars).
+async function sendBackInStockDigest(items) {
+  if (!items || !items.length) return false;
+  const header = items.length === 1
+    ? '🟢 *1 PRODUTO VOLTOU AO ESTOQUE*'
+    : `🟢 *${items.length} PRODUTOS VOLTARAM AO ESTOQUE*`;
+  const lines = [header, ''];
+
+  for (const it of items) {
+    const url = withAffiliateTag(it.url);
+    const nameLabel  = escapeMarkdown(it.name);
+    const storeLabel = escapeMarkdown((it.store || '').toUpperCase());
+    const priceLabel = escapeMarkdown(formatPrice(it.price));
+    const safeUrl    = escapeMdUrl(url);
+    lines.push(`📦 [${nameLabel}](${safeUrl})`);
+    lines.push(`   _${storeLabel}_ — *${priceLabel}*`);
+    if (it.lowestPrice && it.lowestPrice > 0) {
+      lines.push(`   📌 mín\\. histórico: ${escapeMarkdown(formatPrice(it.lowestPrice))}`);
+    }
+    lines.push('');
+  }
+
+  const reply_markup = {
+    inline_keyboard: [[
+      { text: '💎 Monitorar meus produtos', url: `https://t.me/${BOT_USERNAME}` },
+    ]],
+  };
+
+  try {
+    await tgSend('sendMessage', TELEGRAM_CHANNEL_ID, lines.join('\n'), {
+      parse_mode: 'MarkdownV2',
+      disable_web_page_preview: true,
+      reply_markup,
+    });
+    console.log(`[Telegram] Digest back_in_stock enviado: ${items.length} produto(s)`);
+    return true;
+  } catch (err) {
+    console.error('[Telegram] Erro ao enviar digest:', err.message);
+    return false;
+  }
+}
+
 async function sendAdminMessage(text, opts = {}) {
   if (!TELEGRAM_ADMIN_USER_ID) {
     console.warn('[Telegram] TELEGRAM_ADMIN_USER_ID não configurado — pulando notificação admin');
@@ -393,4 +437,4 @@ async function sendAdminMessage(text, opts = {}) {
   }
 }
 
-module.exports = { sendPriceAlert, sendAdminMessage, sendShowcase, sendCouponDeal };
+module.exports = { sendPriceAlert, sendAdminMessage, sendShowcase, sendCouponDeal, sendBackInStockDigest };

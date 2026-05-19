@@ -6,6 +6,26 @@ const { supabase } = require('./supabase');
 const ALERT_DEDUP_HOURS         = parseInt(process.env.ALERT_DEDUP_HOURS || '168', 10);
 const ALERT_DEDUP_TOLERANCE_PCT = parseFloat(process.env.ALERT_DEDUP_TOLERANCE_PCT || '2');
 
+// Cooldown adaptativo: produto que disparou MUITO alerta em 7d entra em mute.
+// Mata o flood de produto volátil (ex: Lancôme oscilando R$ 710 / 812 / 1015).
+const COOLDOWN_THRESHOLD  = parseInt(process.env.COOLDOWN_THRESHOLD  || '3', 10); // ≥ N alertas
+const COOLDOWN_WINDOW_DAYS = parseInt(process.env.COOLDOWN_WINDOW_DAYS || '7', 10); // nos últimos N dias
+const COOLDOWN_MUTE_DAYS  = parseInt(process.env.COOLDOWN_MUTE_DAYS  || '3', 10); // → silencia por N dias
+
+async function isInAdaptiveCooldown(productId) {
+  const since = new Date(Date.now() - COOLDOWN_WINDOW_DAYS * 86400000).toISOString();
+  const { data, error } = await supabase
+    .from('alerts_sent')
+    .select('sent_at')
+    .eq('product_id', productId)
+    .gte('sent_at', since)
+    .order('sent_at', { ascending: false });
+  if (error || !data || data.length < COOLDOWN_THRESHOLD) return false;
+  const lastAt = new Date(data[0].sent_at).getTime();
+  const ageDays = (Date.now() - lastAt) / 86400000;
+  return ageDays < COOLDOWN_MUTE_DAYS;
+}
+
 async function getActiveProducts() {
   const { data, error } = await supabase
     .from('products')
@@ -484,4 +504,5 @@ module.exports = {
   getUnavailableProducts,
   getNextShowcaseProduct,
   markShowcased,
+  isInAdaptiveCooldown,
 };

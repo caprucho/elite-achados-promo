@@ -11,7 +11,7 @@ const HEADERS = {
   'Accept': 'text/html,application/xhtml+xml,*/*;q=0.8',
 };
 
-const CUPONS_COUNT      = parseInt(process.env.KABUM_CUPONS_COUNT || '5', 10);   // produtos por rodada
+const CUPONS_COUNT      = parseInt(process.env.KABUM_CUPONS_COUNT || '3', 10);   // produtos por rodada
 const CUPONS_MIN_STOCK  = parseInt(process.env.KABUM_CUPONS_MIN_STOCK || '5', 10); // estoque mínimo
 const CUPONS_MIN_DISC   = parseFloat(process.env.KABUM_CUPONS_MIN_DISCOUNT || '5'); // % desconto mínimo
 const CUPONS_MAX_PROMOS = parseInt(process.env.KABUM_CUPONS_MAX_PROMOS || '15', 10); // máx de cupons a varrer
