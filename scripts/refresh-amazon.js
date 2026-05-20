@@ -21,7 +21,11 @@ async function main() {
       const r = await getPrice(p.url);
       if (r && r.price > 0) {
         await supabase.from('price_history').insert({ product_id: p.id, price: r.price, is_available: true });
-        console.log(`  ✅ R$ ${r.price.toFixed(2).padStart(10)}  ${p.name.slice(0, 50)}`);
+        // Atualiza image_url no produto (se o scraper retornou) — usado pelo card de Achadinho
+        if (r.imageUrl) {
+          await supabase.from('products').update({ image_url: r.imageUrl }).eq('id', p.id);
+        }
+        console.log(`  ✅ R$ ${r.price.toFixed(2).padStart(10)}  ${p.name.slice(0, 50)}${r.imageUrl ? ' 🖼️' : ''}`);
         ok++;
       } else {
         console.log(`  ❌ NULL${' '.repeat(8)}  ${p.name.slice(0, 50)}`);

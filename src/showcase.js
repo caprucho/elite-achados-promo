@@ -41,7 +41,7 @@ async function postOne() {
       store: product.store,
       category: product.category,
       price,
-      imageUrl: null,
+      imageUrl: product.image_url || null,
     });
 
     if (sent) {

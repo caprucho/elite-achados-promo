@@ -229,7 +229,7 @@ async function getNextShowcaseProduct(store) {
   // (nunca postado vem primeiro). Rotação circular natural.
   const { data, error } = await supabase
     .from('products')
-    .select('id, name, url, store, category')
+    .select('id, name, url, store, category, image_url')
     .eq('store', store)
     .eq('active', true)
     .order('last_showcased_at', { ascending: true, nullsFirst: true })
