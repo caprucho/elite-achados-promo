@@ -429,7 +429,9 @@ async function sendBackInStockDigest(items) {
 }
 
 // TOP da semana — post fixo dominical com as maiores quedas dos últimos 7d.
-// Recebe [{ product: {name, url, store}, currentPrice, weekStartPrice, dropPct }]
+// Recebe [{ product: {name, url, store}, currentPrice, weekStartPrice, dropPct,
+// available }]. Itens com available=false aparecem na lista com tag ESGOTADO
+// (sem link, sem destaque) — assim os membros veem o que perderam.
 async function sendWeeklyTop(items) {
   if (!items || !items.length) return false;
   const lines = ['🏆 *TOP OFERTAS DA SEMANA*', '_As maiores quedas dos últimos 7 dias_', ''];
@@ -443,10 +445,22 @@ async function sendWeeklyTop(items) {
     const current  = escapeMarkdown(formatPrice(it.currentPrice));
     const before   = escapeMarkdown(formatPrice(it.weekStartPrice));
     const pct      = escapeMarkdown(it.dropPct.toFixed(0));
-    lines.push(`*${i}\\.* [${name}](${safeUrl})`);
-    lines.push(`   _${store}_ — *${current}* \\(de ~${before}~, *\\-${pct}%*\\)`);
+
+    if (it.available === false) {
+      lines.push(`*${i}\\.* ~${name}~  ❌ *ESGOTADO*`);
+      lines.push(`   _${store}_ — chegou a *${current}* \\(de ~${before}~, *\\-${pct}%*\\)`);
+    } else {
+      lines.push(`*${i}\\.* [${name}](${safeUrl})`);
+      lines.push(`   _${store}_ — *${current}* \\(de ~${before}~, *\\-${pct}%*\\)`);
+    }
     lines.push('');
     i++;
+  }
+
+  const soldCount = items.filter((it) => it.available === false).length;
+  if (soldCount > 0) {
+    lines.push(`⚠️ _${soldCount === 1 ? '1 item esgotou' : soldCount + ' itens esgotaram'} — ative os alertas pra não perder a próxima\\._`);
+    lines.push('');
   }
 
   lines.push(`💎 *Quer alerta no SEU produto?*`);

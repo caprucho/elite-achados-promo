@@ -1,11 +1,15 @@
-// TOP 5 da semana — post fixo dominical (10h BRT) com as 5 maiores quedas
-// dos últimos 7 dias. Curadoria semanal pra quem perdeu os alertas do dia.
+// TOP da semana — post fixo dominical (16h BRT) com as maiores quedas dos
+// últimos 7 dias. Antes de postar, re-verifica cada item via scraping pra
+// marcar os que esgotaram (continuam na lista, mas com tag ESGOTADO — pros
+// membros saberem que perderam uma oferta boa).
 const { getWeeklyTopDrops } = require('./db/queries');
+const { getPrice } = require('./scrapers');
 const { sendWeeklyTop } = require('./bot/telegram');
 
-const WEEKLY_TOP_HOUR_BRT = parseInt(process.env.WEEKLY_TOP_HOUR_BRT || '10', 10);
-const WEEKLY_TOP_LIMIT    = parseInt(process.env.WEEKLY_TOP_LIMIT    || '5', 10);
-const WEEKLY_TOP_MIN_PCT  = parseFloat(process.env.WEEKLY_TOP_MIN_PCT || '10'); // só se cair pelo menos 10%
+const WEEKLY_TOP_HOUR_BRT       = parseInt(process.env.WEEKLY_TOP_HOUR_BRT || '16', 10);
+const WEEKLY_TOP_LIMIT          = parseInt(process.env.WEEKLY_TOP_LIMIT    || '5', 10);
+const WEEKLY_TOP_MIN_PCT        = parseFloat(process.env.WEEKLY_TOP_MIN_PCT || '10'); // só se cair >= X%
+const WEEKLY_TOP_RECHECK_DELAY  = parseInt(process.env.WEEKLY_TOP_RECHECK_DELAY_MS || '1500', 10);
 
 async function runWeeklyTop() {
   let drops;
@@ -15,12 +19,34 @@ async function runWeeklyTop() {
     console.error('[WeeklyTop] Erro ao buscar drops:', err.message);
     return;
   }
-  // Filtra os que caíram menos que o mínimo
   drops = drops.filter((d) => d.dropPct >= WEEKLY_TOP_MIN_PCT).slice(0, WEEKLY_TOP_LIMIT);
   if (!drops.length) {
     console.log('[WeeklyTop] Nenhuma queda relevante na semana, pulando post');
     return;
   }
+
+  // Re-verifica disponibilidade (scraping ao vivo) antes de postar.
+  // Se esgotou (getPrice null), o item entra na lista com tag ESGOTADO.
+  console.log(`[WeeklyTop] Re-verificando ${drops.length} produto(s)...`);
+  for (const d of drops) {
+    try {
+      const r = await getPrice(d.product.url);
+      if (r && typeof r.price === 'number' && r.price > 0) {
+        d.available = true;
+        d.currentPrice = r.price; // atualiza com preço fresh
+      } else {
+        d.available = false;
+      }
+    } catch (err) {
+      console.warn(`[WeeklyTop] Falha ao re-verificar ${d.product.name}:`, err.message);
+      d.available = false; // conservador: marca como esgotado se scrape falhou
+    }
+    await new Promise((r) => setTimeout(r, WEEKLY_TOP_RECHECK_DELAY));
+  }
+
+  const sold = drops.filter((d) => !d.available).length;
+  console.log(`[WeeklyTop] ${drops.length - sold} disponível(eis), ${sold} esgotado(s)`);
+
   try {
     await sendWeeklyTop(drops);
     console.log(`[WeeklyTop] TOP ${drops.length} postado`);
