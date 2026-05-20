@@ -3,7 +3,8 @@
 // pra garantir que TODAS as dicas circulem antes de repetir. Índice inicial
 // é random pra não começar sempre na primeira após restart.
 
-const BOT_USERNAME = process.env.TELEGRAM_BOT_USERNAME || 'Elite_Achados_PromoBOT';
+// Strip qualquer "@" líder — usado em texto como @nome (o `@` é adicionado manualmente)
+const BOT_USERNAME = (process.env.TELEGRAM_BOT_USERNAME || 'Elite_Achados_PromoBOT').replace(/^@/, '');
 
 const TIPS = [
   `🔔 Ative as notificações do canal pra ser o primeiro a ver as ofertas`,

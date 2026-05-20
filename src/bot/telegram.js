@@ -4,7 +4,8 @@ const axios = require('axios');
 const { nextTip } = require('../utils/tips');
 
 const { TELEGRAM_BOT_TOKEN, TELEGRAM_CHANNEL_ID, TELEGRAM_ADMIN_USER_ID } = process.env;
-const BOT_USERNAME = process.env.TELEGRAM_BOT_USERNAME || 'Elite_Achados_PromoBOT';
+// Strip qualquer "@" líder — link do Telegram NÃO leva "@" depois de t.me/
+const BOT_USERNAME = (process.env.TELEGRAM_BOT_USERNAME || 'Elite_Achados_PromoBOT').replace(/^@/, '');
 const ALERT_SEND_DELAY_MS  = parseInt(process.env.ALERT_SEND_DELAY_MS  || '1500', 10);
 const ALERT_MAX_RETRIES    = parseInt(process.env.ALERT_MAX_RETRIES    || '5', 10);
 const AMAZON_AFFILIATE_TAG = process.env.AMAZON_AFFILIATE_TAG || 'elitepromo06-20';

@@ -18,7 +18,8 @@ if (!TELEGRAM_BOT_TOKEN) {
 const FREE_USER_PRODUCT_LIMIT = parseInt(process.env.FREE_USER_PRODUCT_LIMIT || '3', 10);
 const BONUS_PER_REFERRAL      = parseInt(process.env.BONUS_PER_REFERRAL      || '1', 10);
 const MAX_BONUS_SLOTS         = parseInt(process.env.MAX_BONUS_SLOTS         || '10', 10);
-const BOT_USERNAME            = process.env.TELEGRAM_BOT_USERNAME || 'Elite_Achados_PromoBOT';
+// Strip qualquer "@" líder — link do Telegram NÃO leva "@" depois de t.me/
+const BOT_USERNAME            = (process.env.TELEGRAM_BOT_USERNAME || 'Elite_Achados_PromoBOT').replace(/^@/, '');
 const PREMIUM_IDS = (process.env.TELEGRAM_PREMIUM_USER_IDS || '')
   .split(',').map((s) => s.trim()).filter(Boolean);
 
