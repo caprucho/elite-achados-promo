@@ -1,6 +1,7 @@
 require('dotenv').config();
 const TelegramBot = require('node-telegram-bot-api');
 const axios = require('axios');
+const { nextTip } = require('../utils/tips');
 
 const { TELEGRAM_BOT_TOKEN, TELEGRAM_CHANNEL_ID, TELEGRAM_ADMIN_USER_ID } = process.env;
 const BOT_USERNAME = process.env.TELEGRAM_BOT_USERNAME || 'Elite_Achados_PromoBOT';
@@ -243,6 +244,9 @@ async function sendPriceAlert({ name, url, store, category, currentPrice, lowest
     ].join('\n');
   }
 
+  // Dica rotativa no final (engaja sem poluir muito)
+  caption += `\n\n_${escapeMarkdown(nextTip())}_`;
+
   const reply_markup = buildShareKeyboard({ name, url, currentPrice, alertType, discountPct });
 
   let mainSent = false;
@@ -315,6 +319,8 @@ async function sendShowcase({ name, url, store, category, price, imageUrl }) {
     `_Preço de referência — confira o valor atual na página\\._`,
     ``,
     `🛍️ [Ver na loja](${safeUrl})${categoryLine}`,
+    ``,
+    `_${escapeMarkdown(nextTip())}_`,
   ].join('\n');
 
   const reply_markup = {
@@ -360,6 +366,8 @@ async function sendCouponDeal({ name, url, price, oldPrice, discountPct, stock, 
     ``,
     `🛒 [Ver produto](${safeUrl})`,
     `_Use o cupom no carrinho antes de fechar a compra\\._`,
+    ``,
+    `_${escapeMarkdown(nextTip())}_`,
   );
   const caption = lines.join('\n');
 
@@ -407,6 +415,8 @@ async function sendBackInStockDigest(items) {
     }
     lines.push('');
   }
+
+  lines.push(`_${escapeMarkdown(nextTip())}_`);
 
   const reply_markup = {
     inline_keyboard: [[

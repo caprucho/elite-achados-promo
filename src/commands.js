@@ -101,22 +101,106 @@ const SUPPORTED_LIST = [
   '_Para outras lojas, use_ `/sugerir <link>` _que eu avalio._',
 ].join('\n');
 
+// Guia COMPLETO — exibido pelo /help. Mais detalhado que helpMessage().
+function fullGuide(admin) {
+  const lines = [
+    '📖 *GUIA COMPLETO — Elite Achados & Promo*',
+    '',
+    '*🎯 O que é o canal?*',
+    'Monitoro preços em *14+ lojas brasileiras* e alerto no canal quando algo *realmente* cai de preço. Sem promoção falsa, sem flood.',
+    '',
+    '*📺 O que sai no canal:*',
+    '📉 *Queda de preço* (≥20% vs último preço)',
+    '🏆 *Novo mínimo histórico*',
+    '🎯 *Voltou ao mínimo* — momento bom de comprar',
+    '🐛 *Bug de preço* (>80% off — corre que esgota)',
+    '🟢 *Voltou ao estoque* — digest 1x/dia (15h BRT)',
+    '🛒 *Achadinhos da Amazon* — 5x/dia em horário aleatório',
+    '🎟️ *Cupons KaBuM* — 13h e 19h todo dia',
+    '🏆 *TOP da semana* — domingos 16h',
+    '',
+    '*🤖 SEUS COMANDOS*',
+    '',
+    `📦 \`/addproduto <link>\` — *cadastra um produto pra monitorar*. Quando ele cair de preço, recebe alerta no canal.`,
+    `   Ex: \`/addproduto https://amazon.com.br/dp/B0XYZ\``,
+    `   Limite: *${FREE_USER_PRODUCT_LIMIT} produtos grátis*`,
+    '',
+    '📋 `/meusprodutos` — lista todos os seus produtos cadastrados, com ID',
+    '',
+    '🗑 `/removerproduto <id>` — para de monitorar um produto seu',
+    '   Ex: `/removerproduto abc-123`',
+    '   _(use o ID que aparece em /meusprodutos)_',
+    '',
+    '💡 `/sugerir <link>` — *sugere um produto pro canal* (sem limite)',
+    '   Eu reviso e adiciono se fizer sentido. Pode incluir um comentário:',
+    '   Ex: `/sugerir https://kabum.com.br/produto bom pra setup gamer`',
+    '',
+    `🤝 \`/convidar\` — pega seu *link de indicação*. Cada amigo que se cadastrar pelo seu link te dá *+${BONUS_PER_REFERRAL} slot extra* (até +${MAX_BONUS_SLOTS}).`,
+    '',
+    '🛒 `/lojas` — vê a lista de lojas suportadas',
+    '',
+    'ℹ️ `/ajuda` — versão curta da ajuda',
+    'ℹ️ `/help` — este guia completo',
+    '',
+    '*🎁 LIMITE GRATUITO E COMO AUMENTAR*',
+    `• Free: *${FREE_USER_PRODUCT_LIMIT} produtos*`,
+    `• +${BONUS_PER_REFERRAL} por amigo indicado (até +${MAX_BONUS_SLOTS} bônus)`,
+    '• Premium: limite alto + features extras (em breve)',
+    '',
+    '*💡 PRA NÃO PERDER NENHUMA OFERTA*',
+    '🔔 *Ative as notificações* do canal (toque no nome do canal → Sino)',
+    '📌 *Fixe o canal* no topo do Telegram (toque longo → Fixar)',
+    '🤝 Compartilhe o canal com amigos — ofertas boas ficam melhor em grupo',
+    '',
+    '*❓ DÚVIDAS FREQUENTES*',
+    '• *Posso confiar nos preços?* Sim — verifico antes de postar e bugs >80% passam por dupla checagem.',
+    '• *Por que não recebo alerta dos meus produtos no privado?* Por enquanto, todos os alertas saem no canal — você só precisa ativar as notificações.',
+    '• *Quanto tempo até receber um alerta?* Faço scan a cada ~30-60 min em todos os produtos cadastrados.',
+    '',
+    '✉️ *Suporte:* qualquer dúvida ou erro, me chama no privado.',
+  ];
+  if (admin) {
+    lines.push(
+      '',
+      '👑 *COMANDOS ADMIN*',
+      '`/listarprodutos` — todos os ativos no banco',
+      '`/indisponiveis` — produtos em backoff',
+      '`/postarcupons` — dispara rotina KaBuM agora',
+      '`/topsemana` — posta TOP da semana agora',
+      '`/sugestoes` — sugestões pendentes',
+      '`/aprovarsugestao <id>` — aprovar',
+      '`/rejeitarsugestao <id>` — rejeitar',
+    );
+  }
+  return lines.join('\n');
+}
+
 function helpMessage(admin) {
   const base = [
-    '🤖 *Como usar o bot*',
+    '👋 *Bem-vindo(a) ao Elite Achados & Promo!*',
     '',
-    `📦 \`/addproduto <link>\` — começa a monitorar um produto pra você (limite: ${FREE_USER_PRODUCT_LIMIT} grátis)`,
-    '📋 `/meusprodutos` — lista os produtos que você cadastrou',
-    '🗑 `/removerproduto <id>` — para de monitorar (apenas os seus)',
+    'Monitoro preços em *14+ lojas* e aviso quando algo *cai de verdade* — não inflo expectativa com promoção falsa.',
     '',
-    '💡 `/sugerir <link>` — sugere um produto pro canal (sem limite, eu reviso)',
+    '🎯 *O que sai no canal:*',
+    '• Quedas de preço ≥20%',
+    '• Novos mínimos históricos',
+    '• 🐛 Bugs de preço (>80% off)',
+    '• 🎟️ Cupons KaBuM 13h e 19h',
+    '• 🏆 TOP da semana — domingos 16h',
     '',
-    `🤝 \`/convidar\` — pega seu link de indicação. Cada amigo cadastrado = +${BONUS_PER_REFERRAL} slot extra (até +${MAX_BONUS_SLOTS})`,
-    '',
+    '🤖 *Seus comandos:*',
+    `📦 \`/addproduto <link>\` — monitora um produto (${FREE_USER_PRODUCT_LIMIT} grátis)`,
+    '📋 `/meusprodutos` — seus produtos',
+    '🗑 `/removerproduto <id>` — remover',
+    '💡 `/sugerir <link>` — sugere pro canal',
+    `🤝 \`/convidar\` — +${BONUS_PER_REFERRAL} slot por amigo (até +${MAX_BONUS_SLOTS})`,
     '🛒 `/lojas` — lojas suportadas',
-    'ℹ️ `/ajuda` — esta mensagem',
     '',
-    '✨ *Quer ainda mais?* Me chama no privado pra liberar acesso premium.',
+    '💡 *Pra não perder nenhuma oferta:*',
+    '🔔 Ative as notificações do canal',
+    '📌 Fixe o canal no topo do Telegram',
+    '',
+    'Use `/help` pro guia completo.',
   ];
   if (admin) {
     base.push(
@@ -138,8 +222,8 @@ async function reply(msg, text, opts = {}) {
   return bot.sendMessage(msg.chat.id, text, { parse_mode: 'Markdown', ...opts });
 }
 
-// ── /start [ref_<id>], /ajuda, /help ─────────────────────────────────────────
-bot.onText(/^\/(start|ajuda|help)(?:\s+(\S+))?/, async (msg, match) => {
+// ── /start [ref_<id>], /ajuda — boas-vindas curtas ──────────────────────────
+bot.onText(/^\/(start|ajuda)(?:\s+(\S+))?/, async (msg, match) => {
   const cmd   = match[1];
   const param = match[2];
 
@@ -167,6 +251,11 @@ bot.onText(/^\/(start|ajuda|help)(?:\s+(\S+))?/, async (msg, match) => {
   }
 
   await reply(msg, helpMessage(isAdmin(msg)));
+});
+
+// ── /help — guia completo ────────────────────────────────────────────────────
+bot.onText(/^\/help\b/, async (msg) => {
+  await reply(msg, fullGuide(isAdmin(msg)));
 });
 
 // ── /convidar ────────────────────────────────────────────────────────────────
@@ -493,7 +582,8 @@ const PUBLIC_COMMANDS = [
   { command: 'sugerir',        description: 'Sugerir um produto pro canal' },
   { command: 'convidar',       description: 'Pegar seu link de indicação (+slots por amigo)' },
   { command: 'lojas',          description: 'Ver lojas suportadas' },
-  { command: 'ajuda',          description: 'Como usar o bot' },
+  { command: 'ajuda',          description: 'Como usar o bot (versão curta)' },
+  { command: 'help',           description: 'Guia completo de uso' },
 ];
 
 const ADMIN_COMMANDS = [
