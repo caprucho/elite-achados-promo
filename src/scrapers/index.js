@@ -1,6 +1,5 @@
 const mercadolivre = require('./mercadolivre');
 const amazon       = require('./amazon');
-const dafiti       = require('./dafiti');
 const kabum        = require('./kabum');
 const wap          = require('./wap');
 const netshoes     = require('./netshoes');

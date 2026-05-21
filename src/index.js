@@ -2,7 +2,6 @@ require('dotenv').config();
 const { getActiveProducts, savePrice, getLowestPrice, getLastPrice, wasAlertRecentlySent, registerAlert, getPriceHistory, saveUnavailable, getConsecutiveUnavailableCount, getLastScanAt, getUnavailableStreakStart, wasUnavailableAlertSent, markUnavailableAlertSent, clearUnavailableAlertSent, isInAdaptiveCooldown } = require('./db/queries');
 const { getPrice }       = require('./scrapers');
 const { sendPriceAlert, sendAdminMessage } = require('./bot/telegram');
-const { closeBrowser }   = require('./scrapers/browser');
 const { notifyError, recordAlert, recordScan, recordProduct, scheduleDailySummary } = require('./utils/adminAlerts');
 const { enqueueBackInStock, scheduleBackInStockDigest } = require('./backInStockDigest');
 
@@ -18,8 +17,8 @@ if (process.env.RUN_ONCE !== 'true' && process.env.ENABLE_BOT_COMMANDS !== 'fals
   }
 }
 
-process.on('SIGINT',  () => closeBrowser().then(() => process.exit(0)));
-process.on('SIGTERM', () => closeBrowser().then(() => process.exit(0)));
+process.on('SIGINT',  () => process.exit(0));
+process.on('SIGTERM', () => process.exit(0));
 
 // Last-resort: erros que escaparam do try-catch interno
 process.on('unhandledRejection', (reason) => {
@@ -335,7 +334,6 @@ async function main() {
     console.log('Elite Achados & Promo — modo cron.');
     console.log(`   Queda mínima  : ${DROP_THRESHOLD}% (último preço) | ${MIN_BEAT_THRESHOLD}% (mínimo histórico)\n`);
     await runScan();
-    await closeBrowser();
     process.exit(0);
   }
 
