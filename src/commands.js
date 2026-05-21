@@ -11,6 +11,7 @@ const {
 } = require('./db/queries');
 const { getPrice } = require('./scrapers');
 const { sendAdminMessage } = require('./bot/telegram');
+const { normalizeUrl } = require('./utils/normalizeUrl');
 
 const { TELEGRAM_BOT_TOKEN, TELEGRAM_ADMIN_USER_ID } = process.env;
 
@@ -296,13 +297,24 @@ bot.onText(/^\/lojas\b/, async (msg) => {
 
 // ── /addproduto <url> ────────────────────────────────────────────────────────
 bot.onText(/^\/addproduto\s+(.+)$/, async (msg, match) => {
-  const url = match[1].trim();
+  let url = match[1].trim();
   const userId = String(msg.from.id);
   const username = msg.from.username || msg.from.first_name || 'desconhecido';
 
   // Valida URL
   try { new URL(url); } catch {
     return reply(msg, '❌ URL inválida. Envie a URL completa do produto.');
+  }
+
+  // Resolve encurtadores (a.co, amzn.to, amzn.eu) e limpa tracking
+  try {
+    const norm = await normalizeUrl(url);
+    if (norm.wasShort) {
+      url = norm.url;
+      console.log(`[Bot] URL encurtada expandida → ${url}`);
+    }
+  } catch (err) {
+    console.warn('[Bot] normalizeUrl falhou:', err.message);
   }
 
   // Loja suportada?
