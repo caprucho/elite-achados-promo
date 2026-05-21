@@ -36,6 +36,7 @@ async function postOne() {
     }
 
     const sent = await sendShowcase({
+      productId: product.id,
       name: product.name,
       url: product.url,
       store: product.store,

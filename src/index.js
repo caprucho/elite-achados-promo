@@ -175,7 +175,7 @@ async function processProduct(product) {
       console.log(`[Monitor] 🐛 Enviando alerta de BUG — ${name}: ${currentPrice}`);
       try {
         await sendPriceAlert({
-          name, url, store, category,
+          productId: id, name, url, store, category,
           currentPrice, lastPrice, lowestPrice,
           discountPct: dropPct,
           imageUrl, priceHistory,
@@ -249,7 +249,7 @@ async function processProduct(product) {
                           : alertType === 'drop'     ? dropFromLast
                           : 0;
         try {
-          await sendPriceAlert({ name, url, store, category, currentPrice, lastPrice, lowestPrice, discountPct, imageUrl, priceHistory, alertType });
+          await sendPriceAlert({ productId: id, name, url, store, category, currentPrice, lastPrice, lowestPrice, discountPct, imageUrl, priceHistory, alertType });
           await registerAlert(id, currentPrice, discountPct);
           recordAlert(alertType);
         } catch (err) {

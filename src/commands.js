@@ -6,8 +6,11 @@ const {
   addSuggestion, getPendingSuggestions, updateSuggestionStatus,
   recordReferral, countReferrals, hasBeenReferred,
   getUnavailableProducts,
+  findActiveProductByUrl, addWatcher, removeWatcher, isWatching,
+  getWatchedProducts, countWatchedProducts,
 } = require('./db/queries');
 const { getPrice } = require('./scrapers');
+const { sendAdminMessage } = require('./bot/telegram');
 
 const { TELEGRAM_BOT_TOKEN, TELEGRAM_ADMIN_USER_ID } = process.env;
 
@@ -122,13 +125,16 @@ function fullGuide(admin) {
     '',
     '*🤖 SEUS COMANDOS*',
     '',
-    `📦 \`/addproduto <link>\` — *cadastra um produto pra monitorar*. Quando ele cair de preço, recebe alerta no canal.`,
+    `📦 \`/addproduto <link>\` — *cadastra um produto pra monitorar*. Você recebe alerta *no privado* quando ele cair.`,
     `   Ex: \`/addproduto https://amazon.com.br/dp/B0XYZ\``,
     `   Limite: *${FREE_USER_PRODUCT_LIMIT} produtos grátis*`,
+    `   _Se o produto já é monitorado pelo canal, vira watcher de graça (não conta no limite)._`,
     '',
-    '📋 `/meusprodutos` — lista todos os seus produtos cadastrados, com ID',
+    '💎 *Botão "Monitorar produto"* nos cards do canal — toca e começa a receber alertas daquele item no privado (não conta no limite).',
     '',
-    '🗑 `/removerproduto <id>` — para de monitorar um produto seu',
+    '📋 `/meusprodutos` — lista tudo: o que você cadastrou + o que está só monitorando',
+    '',
+    '🗑 `/removerproduto <id>` — para de monitorar um produto',
     '   Ex: `/removerproduto abc-123`',
     '   _(use o ID que aparece em /meusprodutos)_',
     '',
@@ -155,8 +161,9 @@ function fullGuide(admin) {
     '',
     '*❓ DÚVIDAS FREQUENTES*',
     '• *Posso confiar nos preços?* Sim — verifico antes de postar e bugs >80% passam por dupla checagem.',
-    '• *Por que não recebo alerta dos meus produtos no privado?* Por enquanto, todos os alertas saem no canal — você só precisa ativar as notificações.',
-    '• *Quanto tempo até receber um alerta?* Faço scan a cada ~30-60 min em todos os produtos cadastrados.',
+    '• *Onde recebo os alertas dos meus produtos?* No privado deste bot. Eles também aparecem no canal pra todo mundo.',
+    '• *Qual a diferença entre cadastrar e clicar em "Monitorar produto"?* Cadastrar adiciona um produto novo (conta no limite). Clicar em "Monitorar" num card já existente só te coloca como observador (não conta).',
+    '• *Quanto tempo até receber um alerta?* Faço scan a cada ~30-60 min em todos os produtos.',
     '',
     '✉️ *Suporte:* qualquer dúvida ou erro, me chama no privado.',
   ];
@@ -315,7 +322,25 @@ bot.onText(/^\/addproduto\s+(.+)$/, async (msg, match) => {
     );
   }
 
-  // Limite por usuário (admin/premium passa direto)
+  // OPCIONAL: produto JÁ monitorado pelo bot? Vira watcher (não cobra slot)
+  const existing = await findActiveProductByUrl(url);
+  if (existing) {
+    if (await isWatching(existing.id, userId)) {
+      return reply(msg, `ℹ️ Você *já está monitorando* esse produto.\n\n📦 ${existing.name}\n\nVai receber alertas no privado.`);
+    }
+    try {
+      await addWatcher(existing.id, userId, username);
+      return reply(msg,
+        `✅ *Você agora monitora esse produto!*\n\n📦 ${existing.name}\n🏪 ${existing.store.toUpperCase()}\n\n` +
+        `_Sempre que houver uma queda ou notificação, vou te avisar aqui no privado._\n\n` +
+        `_Esse produto já é monitorado pelo canal — não conta no seu limite de slots._`
+      );
+    } catch (err) {
+      return reply(msg, `❌ Erro ao registrar: ${err.message}`);
+    }
+  }
+
+  // Produto NOVO — agora sim valida limite (admin/premium passa direto)
   if (!isPremium(msg)) {
     const [count, limit] = await Promise.all([
       countProductsByUser(userId),
@@ -350,7 +375,6 @@ bot.onText(/^\/addproduto\s+(.+)$/, async (msg, match) => {
 
   const { price, name: scrapedName } = result;
 
-  // Validações finais — defesa contra dados lixo
   if (typeof price !== 'number' || isNaN(price) || price <= 0) {
     return reply(msg, '❌ O preço retornado é inválido. Pode ser bug do scraper ou produto fora de venda. Tente outra URL.');
   }
@@ -366,10 +390,16 @@ bot.onText(/^\/addproduto\s+(.+)$/, async (msg, match) => {
       addedByUsername: username,
     });
 
+    // Registra também como watcher pra receber DM
+    if (status !== 'already_active') {
+      await addWatcher(id, userId, username).catch(() => {});
+    }
+
     if (status === 'already_active') {
+      // Race condition raríssima: outro user adicionou entre findActiveProductByUrl e addProduct
+      await addWatcher(id, userId, username).catch(() => {});
       return reply(msg,
-        `ℹ️ Esse produto *já está sendo monitorado* (por você ou por outro usuário). ` +
-        `Você vai receber os alertas no canal.\n\n🆔 \`${id}\``
+        `ℹ️ Esse produto já estava sendo monitorado. Adicionei você como watcher — vai receber alertas no privado.\n\n🆔 \`${id}\``
       );
     }
 
@@ -379,8 +409,19 @@ bot.onText(/^\/addproduto\s+(.+)$/, async (msg, match) => {
 
     await reply(msg,
       `${header}\n\n📦 ${name}\n🏪 ${route.label}\n💰 Preço atual: *${fmtPrice(price)}*\n\n` +
-      `🆔 \`${id}\`\n\n_Vou alertar se baixar significativamente._`
+      `🆔 \`${id}\`\n\n_Vou alertar você no privado quando o preço cair._`
     );
+
+    // Notifica admin no privado sobre o novo produto cadastrado
+    sendAdminMessage([
+      `📥 *Novo produto cadastrado*`,
+      ``,
+      `👤 @${username} (\`${userId}\`)`,
+      `📦 ${name}`,
+      `🏪 ${route.label}`,
+      `💰 ${fmtPrice(price)}`,
+      `🔗 ${url}`,
+    ].join('\n')).catch(() => {});
   } catch (err) {
     await reply(msg, `❌ Erro ao salvar: ${err.message}`);
   }
@@ -389,42 +430,71 @@ bot.onText(/^\/addproduto\s+(.+)$/, async (msg, match) => {
 // ── /meusprodutos ────────────────────────────────────────────────────────────
 bot.onText(/^\/meusprodutos\b/, async (msg) => {
   const userId = String(msg.from.id);
-  const products = await getProductsByUser(userId);
+  const [cadastrados, monitorados] = await Promise.all([
+    getProductsByUser(userId),       // produtos que o user adicionou (conta no limite)
+    getWatchedProducts(userId),      // produtos que o user só observa (NÃO conta no limite)
+  ]);
 
-  if (!products.length) {
-    return reply(msg, 'Você ainda não cadastrou nenhum produto.\n\nUse `/addproduto <link>` pra começar.');
+  // Tira os cadastrados da lista de monitorados (evita duplicar — addproduto registra os dois)
+  const cadastradosIds = new Set(cadastrados.map((p) => p.id));
+  const apenasObservados = monitorados.filter((p) => !cadastradosIds.has(p.id));
+
+  if (!cadastrados.length && !apenasObservados.length) {
+    return reply(msg,
+      'Você ainda não tem produtos.\n\n' +
+      'Use `/addproduto <link>` pra cadastrar, ou clique em *💎 Monitorar produto* nos cards do canal pra acompanhar produtos que já estão no bot.'
+    );
   }
 
   let limitInfo;
   if (isPremium(msg)) {
-    limitInfo = '✨ premium';
+    limitInfo = '✨ premium (sem limite)';
   } else {
     const limit = await getUserLimit(userId);
     const bonusTag = limit.bonus > 0 ? ` (+${limit.bonus} bônus 🤝)` : '';
-    limitInfo = `${products.length}/${limit.total}${bonusTag}`;
+    limitInfo = `${cadastrados.length}/${limit.total} cadastrados${bonusTag}`;
   }
-  const lines = products.map((p) =>
-    `• *${p.name}*\n  🏪 ${p.store}  •  🆔 \`${p.id}\``
-  );
-  await reply(msg, `📋 *Seus produtos* (${limitInfo})\n\n${lines.join('\n\n')}`);
+
+  const blocks = [`📋 *Seus produtos* (${limitInfo})`, ''];
+
+  if (cadastrados.length) {
+    blocks.push('🆕 *Cadastrados por você* _(contam no limite)_');
+    blocks.push(...cadastrados.map((p) => `• *${p.name}*\n  🏪 ${p.store}  •  🆔 \`${p.id}\``));
+    blocks.push('');
+  }
+  if (apenasObservados.length) {
+    blocks.push(`👀 *Monitorando do canal* _(${apenasObservados.length} produtos — não contam no limite)_`);
+    blocks.push(...apenasObservados.map((p) => `• *${p.name}*\n  🏪 ${p.store}  •  🆔 \`${p.id}\``));
+  }
+
+  await reply(msg, blocks.join('\n\n'));
 });
 
 // ── /removerproduto <uuid> ───────────────────────────────────────────────────
+// Sempre remove o watcher do user. Se o user for admin ou o cadastrador
+// original, também DESATIVA o produto (afeta todos os watchers).
 bot.onText(/^\/removerproduto\s+(\S+)/, async (msg, match) => {
   const productId = match[1].trim();
   const userId = String(msg.from.id);
-
-  // Admin remove qualquer; usuário só os seus
-  if (!isAdmin(msg)) {
-    const owned = await findProductByIdAndUser(productId, userId);
-    if (!owned) {
-      return reply(msg, '❌ Produto não encontrado entre os seus. Veja `/meusprodutos`.');
-    }
-  }
+  const admin = isAdmin(msg);
 
   try {
-    await deactivateProduct(productId);
-    await reply(msg, '✅ Produto desativado. Você não receberá mais alertas dele.');
+    // Tira o user dos watchers (sempre — idempotente)
+    await removeWatcher(productId, userId).catch(() => {});
+
+    if (admin) {
+      await deactivateProduct(productId);
+      return reply(msg, '✅ Produto *desativado para todos* (admin).\nNinguém mais receberá alertas.');
+    }
+
+    const owned = await findProductByIdAndUser(productId, userId);
+    if (owned) {
+      await deactivateProduct(productId);
+      return reply(msg, '✅ Produto desativado. Você cadastrou esse — slot liberado.');
+    }
+
+    // Era só observador
+    await reply(msg, '✅ Você parou de monitorar esse produto. Vai continuar no canal pra outros.');
   } catch (err) {
     await reply(msg, `❌ Erro: ${err.message}`);
   }
@@ -569,6 +639,57 @@ bot.onText(/^\/(aprovar|rejeitar)sugestao\s+(\S+)/, async (msg, match) => {
   } catch (err) {
     await reply(msg, `❌ Erro: ${err.message}`);
   }
+});
+
+// ── Callback queries (botões inline tipo "💎 Monitorar produto") ────────────
+bot.on('callback_query', async (cb) => {
+  const data = cb.data || '';
+  const userId = String(cb.from.id);
+  const username = cb.from.username || cb.from.first_name || 'desconhecido';
+
+  // watch:<productId> → registra o user como watcher do produto
+  if (data.startsWith('watch:')) {
+    const productId = data.slice(6);
+    try {
+      const already = await isWatching(productId, userId);
+      if (already) {
+        await bot.answerCallbackQuery(cb.id, { text: 'Você já monitora esse produto', show_alert: false });
+        return;
+      }
+      const r = await addWatcher(productId, userId, username);
+      if (r.status === 'already_watching') {
+        await bot.answerCallbackQuery(cb.id, { text: 'Você já monitora esse produto', show_alert: false });
+        return;
+      }
+      await bot.answerCallbackQuery(cb.id, { text: '✅ Monitorando! Você receberá alertas no privado', show_alert: true });
+      // DM de confirmação (best effort — falha se o user nunca abriu o bot)
+      bot.sendMessage(userId, [
+        `💎 *Você agora monitora um produto!*`,
+        ``,
+        `Sempre que houver alerta desse produto, vou te avisar aqui no privado.`,
+        ``,
+        `Veja todos os seus monitorados com \`/meusprodutos\`.`,
+      ].join('\n'), { parse_mode: 'Markdown' }).catch(() => {});
+    } catch (err) {
+      console.error('[callback watch] erro:', err.message);
+      await bot.answerCallbackQuery(cb.id, { text: '❌ Erro ao registrar. Tente abrir o bot no privado primeiro.', show_alert: true });
+    }
+    return;
+  }
+
+  // unwatch:<productId> → remove watcher (usado em DMs)
+  if (data.startsWith('unwatch:')) {
+    const productId = data.slice(8);
+    try {
+      await removeWatcher(productId, userId);
+      await bot.answerCallbackQuery(cb.id, { text: '🗑 Parou de monitorar esse produto', show_alert: false });
+    } catch (err) {
+      await bot.answerCallbackQuery(cb.id, { text: '❌ Erro', show_alert: false });
+    }
+    return;
+  }
+
+  await bot.answerCallbackQuery(cb.id, { text: '' }).catch(() => {});
 });
 
 bot.on('polling_error', (err) => {

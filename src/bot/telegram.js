@@ -2,6 +2,7 @@ require('dotenv').config();
 const TelegramBot = require('node-telegram-bot-api');
 const axios = require('axios');
 const { nextTip } = require('../utils/tips');
+const { getWatchers } = require('../db/queries');
 
 const { TELEGRAM_BOT_TOKEN, TELEGRAM_CHANNEL_ID, TELEGRAM_ADMIN_USER_ID } = process.env;
 // Strip qualquer "@" líder — link do Telegram NÃO leva "@" depois de t.me/
@@ -146,31 +147,43 @@ const CATEGORY_LABELS = {
   esporte:     '⚽ Esporte',
 };
 
-function buildShareKeyboard({ name, url, currentPrice, alertType, discountPct }) {
+// Botões padronizados pros cards de produto (alerta, showcase).
+// Recebe productId pra criar o callback button do "Monitorar produto".
+// Se productId for null, o botão vira link genérico pro bot.
+function buildProductButtons({ productId, name, url, currentPrice, alertType, discountPct }) {
   const tag = alertType === 'price_bug'
     ? `🐛 BUG DE PREÇO -${(discountPct || 0).toFixed(0)}%`
     : alertType === 'min_beat' || alertType === 'min_hit'
       ? '🏆 menor preço já visto'
       : alertType === 'back_in_stock'
         ? '🟢 voltou ao estoque'
-        : `📉 -${(discountPct || 0).toFixed(0)}%`;
+        : alertType === 'showcase'
+          ? '🛒 achadinho'
+          : `📉 -${(discountPct || 0).toFixed(0)}%`;
 
   const prefix = alertType === 'price_bug' ? '🐛 BUG! Corre!' : '🔥';
-  const shareText = `${prefix} ${name}\n${formatPrice(currentPrice)} (${tag})\n\nMais ofertas e cadastre seus próprios produtos: @${BOT_USERNAME}`;
+  const priceLabel = currentPrice ? formatPrice(currentPrice) : '';
+  const shareText = `${prefix} ${name}\n${priceLabel} (${tag})\n\nMais ofertas e cadastre seus produtos: @${BOT_USERNAME}`;
   const shareUrl  = `https://t.me/share/url?url=${encodeURIComponent(url)}&text=${encodeURIComponent(shareText)}`;
-  const botUrl    = `https://t.me/${BOT_USERNAME}`;
+
+  const monitorBtn = productId
+    ? { text: '💎 Monitorar produto', callback_data: `watch:${productId}` }
+    : { text: '💎 Monitorar produto', url: `https://t.me/${BOT_USERNAME}` };
 
   return {
     inline_keyboard: [
       [
         { text: '📤 Compartilhar', url: shareUrl },
-        { text: '💎 Monitorar produto', url: botUrl },
+        monitorBtn,
       ],
     ],
   };
 }
 
-async function sendPriceAlert({ name, url, store, category, currentPrice, lowestPrice, lastPrice, discountPct, imageUrl, priceHistory = [], alertType = 'minimum' }) {
+// Alias mantido por compat (caso ainda apareça em alguma referência)
+const buildShareKeyboard = buildProductButtons;
+
+async function sendPriceAlert({ productId, name, url, store, category, currentPrice, lowestPrice, lastPrice, discountPct, imageUrl, priceHistory = [], alertType = 'minimum' }) {
   url = withAffiliateTag(url); // aplica tag de afiliado Amazon (no-op nas outras lojas)
   const storeLabel    = escapeMarkdown(store.toUpperCase());
   const nameLabel     = escapeMarkdown(name);
@@ -248,7 +261,7 @@ async function sendPriceAlert({ name, url, store, category, currentPrice, lowest
   // Dica rotativa no final (engaja sem poluir muito)
   caption += `\n\n_${escapeMarkdown(nextTip())}_`;
 
-  const reply_markup = buildShareKeyboard({ name, url, currentPrice, alertType, discountPct });
+  const reply_markup = buildProductButtons({ productId, name, url, currentPrice, alertType, discountPct });
 
   let mainSent = false;
   try {
@@ -290,6 +303,35 @@ async function sendPriceAlert({ name, url, store, category, currentPrice, lowest
     throw new Error('Falha ao enviar alerta após retries');
   }
 
+  // Envia DM individual pros watchers desse produto (best effort)
+  if (productId) {
+    try {
+      const watchers = await getWatchers(productId);
+      if (watchers.length) {
+        const dmCaption = caption + `\n\n_⚡ você monitora esse produto — toque pra parar de receber_`;
+        const dmKeyboard = {
+          inline_keyboard: [[{ text: '🗑 Parar de monitorar', callback_data: `unwatch:${productId}` }]],
+        };
+        for (const watcherId of watchers) {
+          try {
+            if (imageUrl) {
+              await tgSend('sendPhoto', watcherId, imageUrl, { caption: dmCaption, parse_mode: 'MarkdownV2', reply_markup: dmKeyboard });
+            } else {
+              await tgSend('sendMessage', watcherId, dmCaption, { parse_mode: 'MarkdownV2', disable_web_page_preview: false, reply_markup: dmKeyboard });
+            }
+          } catch (err) {
+            // 403: user bloqueou o bot, ou nunca abriu o privado — ignora silenciosamente
+            const code = err?.response?.body?.error_code;
+            if (code !== 403) console.warn(`[Telegram] DM ${watcherId} falhou:`, err.message);
+          }
+        }
+        console.log(`[Telegram] DM enviada pra ${watchers.length} watcher(s) de ${name}`);
+      }
+    } catch (err) {
+      console.warn('[Telegram] Erro ao buscar watchers:', err.message);
+    }
+  }
+
   // Envia gráfico de histórico de preço como mensagem separada (best effort)
   const chartUrl = await buildChartUrl(priceHistory);
   if (chartUrl) {
@@ -302,7 +344,7 @@ async function sendPriceAlert({ name, url, store, category, currentPrice, lowest
 
 // Card de vitrine — indicação de produto (não é alerta de queda).
 // Usado pela rotação de produtos Amazon pra gerar tráfego de afiliado.
-async function sendShowcase({ name, url, store, category, price, imageUrl }) {
+async function sendShowcase({ productId, name, url, store, category, price, imageUrl }) {
   url = withAffiliateTag(url);
   const storeLabel = escapeMarkdown(store.toUpperCase());
   const nameLabel  = escapeMarkdown(name);
@@ -324,12 +366,7 @@ async function sendShowcase({ name, url, store, category, price, imageUrl }) {
     `_${escapeMarkdown(nextTip())}_`,
   ].join('\n');
 
-  const reply_markup = {
-    inline_keyboard: [[
-      { text: '🛍️ Ver oferta', url },
-      { text: '💎 Monitorar produto', url: `https://t.me/${BOT_USERNAME}` },
-    ]],
-  };
+  const reply_markup = buildProductButtons({ productId, name, url, currentPrice: price, alertType: 'showcase' });
 
   try {
     if (imageUrl) {

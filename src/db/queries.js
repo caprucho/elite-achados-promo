@@ -474,6 +474,91 @@ async function getWeeklyTopDrops(limit = 5) {
   return drops.slice(0, limit);
 }
 
+// ─── Watchers (alertas privados pra produtos individuais) ───────────────────
+
+async function addWatcher(productId, telegramId, username = null) {
+  const { data, error } = await supabase
+    .from('product_watchers')
+    .insert({ product_id: productId, telegram_id: String(telegramId), username })
+    .select('product_id')
+    .maybeSingle();
+  if (error) {
+    if (error.code === '23505') return { status: 'already_watching' }; // unique violation
+    throw new Error(error.message);
+  }
+  return { status: 'added', productId: data?.product_id };
+}
+
+async function removeWatcher(productId, telegramId) {
+  const { error } = await supabase
+    .from('product_watchers')
+    .delete()
+    .eq('product_id', productId)
+    .eq('telegram_id', String(telegramId));
+  if (error) throw new Error(error.message);
+}
+
+async function getWatchers(productId) {
+  const { data, error } = await supabase
+    .from('product_watchers')
+    .select('telegram_id')
+    .eq('product_id', productId);
+  if (error) {
+    console.error('[getWatchers]', error.message);
+    return [];
+  }
+  return (data || []).map((r) => r.telegram_id);
+}
+
+async function isWatching(productId, telegramId) {
+  const { count, error } = await supabase
+    .from('product_watchers')
+    .select('*', { count: 'exact', head: true })
+    .eq('product_id', productId)
+    .eq('telegram_id', String(telegramId));
+  if (error) return false;
+  return (count || 0) > 0;
+}
+
+async function countWatchedProducts(telegramId) {
+  const { count, error } = await supabase
+    .from('product_watchers')
+    .select('*', { count: 'exact', head: true })
+    .eq('telegram_id', String(telegramId));
+  if (error) return 0;
+  return count || 0;
+}
+
+async function getWatchedProducts(telegramId) {
+  const { data, error } = await supabase
+    .from('product_watchers')
+    .select('product_id, products(id, name, store, url, active)')
+    .eq('telegram_id', String(telegramId));
+  if (error) {
+    console.error('[getWatchedProducts]', error.message);
+    return [];
+  }
+  return (data || [])
+    .map((r) => r.products)
+    .filter((p) => p && p.active);
+}
+
+// Procura produto ativo pela URL (independente de quem cadastrou). Usado
+// pelo /addproduto pra detectar "já monitorado" antes de cobrar slot.
+async function findActiveProductByUrl(url) {
+  const { data, error } = await supabase
+    .from('products')
+    .select('id, name, store, url')
+    .eq('url', url)
+    .eq('active', true)
+    .maybeSingle();
+  if (error) {
+    console.error('[findActiveProductByUrl]', error.message);
+    return null;
+  }
+  return data;
+}
+
 module.exports = {
   getActiveProducts,
   savePrice,
@@ -505,4 +590,11 @@ module.exports = {
   getNextShowcaseProduct,
   markShowcased,
   isInAdaptiveCooldown,
+  addWatcher,
+  removeWatcher,
+  getWatchers,
+  isWatching,
+  countWatchedProducts,
+  getWatchedProducts,
+  findActiveProductByUrl,
 };
