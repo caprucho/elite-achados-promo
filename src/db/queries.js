@@ -1,4 +1,5 @@
 const { supabase } = require('./supabase');
+const { inferGender } = require('../utils/inferGender');
 
 // Dedup de alertas: não re-alertar o mesmo produto num preço ~igual dentro
 // da janela. Janela longa (7 dias) + tolerância (2%) mata o flood de produto
@@ -268,6 +269,11 @@ async function getUnavailableProducts() {
 async function addProduct(name, url, store, opts = {}) {
   const { category = null, addedByTelegramId = null, addedByUsername = null } = opts;
 
+  // Inferência de gênero pra rotear pro tópico certo no grupo
+  const gender = inferGender(name, store, category);
+  const isMasc = !gender.ambiguous && gender.masc;
+  const isFem  = !gender.ambiguous && gender.fem;
+
   // Verifica se a URL já existe (ativa ou desativada)
   const { data: existing } = await supabase
     .from('products')
@@ -279,11 +285,12 @@ async function addProduct(name, url, store, opts = {}) {
     if (existing.active) {
       return { id: existing.id, status: 'already_active' };
     }
-    // Reativa: assume novo dono e atualiza nome/categoria
+    // Reativa: assume novo dono, atualiza nome/categoria/gênero
     const { error } = await supabase
       .from('products')
       .update({
         name, store, category,
+        is_masc: isMasc, is_fem: isFem,
         active: true,
         added_by_telegram_id: addedByTelegramId,
         added_by_username:    addedByUsername,
@@ -298,6 +305,7 @@ async function addProduct(name, url, store, opts = {}) {
     .from('products')
     .insert({
       name, url, store, category,
+      is_masc: isMasc, is_fem: isFem,
       active: true,
       added_by_telegram_id: addedByTelegramId,
       added_by_username:    addedByUsername,
