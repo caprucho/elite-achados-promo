@@ -3,8 +3,12 @@ const TelegramBot = require('node-telegram-bot-api');
 const axios = require('axios');
 const { nextTip } = require('../utils/tips');
 const { getWatchers } = require('../db/queries');
+const { topic, topicsForProduct } = require('../utils/topicRouter');
 
-const { TELEGRAM_BOT_TOKEN, TELEGRAM_CHANNEL_ID, TELEGRAM_ADMIN_USER_ID } = process.env;
+const { TELEGRAM_BOT_TOKEN, TELEGRAM_ADMIN_USER_ID } = process.env;
+// Destino das mensagens: prefere TELEGRAM_GROUP_ID (grupo com tópicos),
+// cai pro TELEGRAM_CHANNEL_ID antigo se a env nova ainda não foi setada.
+const TELEGRAM_DEST_ID = process.env.TELEGRAM_GROUP_ID || process.env.TELEGRAM_CHANNEL_ID;
 // Strip qualquer "@" líder — link do Telegram NÃO leva "@" depois de t.me/
 const BOT_USERNAME = (process.env.TELEGRAM_BOT_USERNAME || 'Elite_Achados_PromoBOT').replace(/^@/, '');
 const ALERT_SEND_DELAY_MS  = parseInt(process.env.ALERT_SEND_DELAY_MS  || '1500', 10);
@@ -25,8 +29,8 @@ function withAffiliateTag(rawUrl) {
   return rawUrl;
 }
 
-if (!TELEGRAM_BOT_TOKEN || !TELEGRAM_CHANNEL_ID) {
-  throw new Error('TELEGRAM_BOT_TOKEN e TELEGRAM_CHANNEL_ID são obrigatórios no .env');
+if (!TELEGRAM_BOT_TOKEN || !TELEGRAM_DEST_ID) {
+  throw new Error('TELEGRAM_BOT_TOKEN e TELEGRAM_GROUP_ID (ou TELEGRAM_CHANNEL_ID) são obrigatórios no .env');
 }
 
 // polling: false — só enviamos mensagens, não precisamos receber
@@ -183,7 +187,34 @@ function buildProductButtons({ productId, name, url, currentPrice, alertType, di
 // Alias mantido por compat (caso ainda apareça em alguma referência)
 const buildShareKeyboard = buildProductButtons;
 
-async function sendPriceAlert({ productId, name, url, store, category, currentPrice, lowestPrice, lastPrice, discountPct, imageUrl, priceHistory = [], alertType = 'minimum' }) {
+// Helper: posta uma mensagem (foto ou texto) com suporte a tópico do grupo.
+// Tenta sendPhoto se tiver imagem; faz fallback pra sendMessage se a foto falhar.
+async function postToDest({ threadId, caption, imageUrl, reply_markup, parse_mode = 'MarkdownV2', disable_web_page_preview = false }) {
+  const opts = { parse_mode, reply_markup };
+  if (threadId) opts.message_thread_id = threadId;
+  try {
+    if (imageUrl) {
+      await tgSend('sendPhoto', TELEGRAM_DEST_ID, imageUrl, { caption, ...opts });
+    } else {
+      await tgSend('sendMessage', TELEGRAM_DEST_ID, caption, { disable_web_page_preview, ...opts });
+    }
+    return true;
+  } catch (err) {
+    console.error(`[Telegram] post thread=${threadId || 'main'} falhou:`, err.message);
+    if (imageUrl) {
+      // Fallback: tenta texto puro (foto pode estar quebrada/restrita)
+      try {
+        await tgSend('sendMessage', TELEGRAM_DEST_ID, caption, { disable_web_page_preview, ...opts });
+        return true;
+      } catch (err2) {
+        console.error(`[Telegram] fallback texto thread=${threadId || 'main'} falhou:`, err2.message);
+      }
+    }
+    return false;
+  }
+}
+
+async function sendPriceAlert({ productId, name, url, store, category, currentPrice, lowestPrice, lastPrice, discountPct, imageUrl, priceHistory = [], alertType = 'minimum', isMasc = false, isFem = false }) {
   url = withAffiliateTag(url); // aplica tag de afiliado Amazon (no-op nas outras lojas)
   const storeLabel    = escapeMarkdown(store.toUpperCase());
   const nameLabel     = escapeMarkdown(name);
@@ -263,42 +294,24 @@ async function sendPriceAlert({ productId, name, url, store, category, currentPr
 
   const reply_markup = buildProductButtons({ productId, name, url, currentPrice, alertType, discountPct });
 
+  // Decide tópico(s): por categoria/gênero. Bug duplica também no tópico Bugs.
+  const threads = new Set(topicsForProduct({ category, isMasc, isFem }));
+  if (alertType === 'price_bug') {
+    const bugsTopic = topic('bugs');
+    if (bugsTopic) threads.add(bugsTopic);
+  }
+  // Se não há nenhum tópico configurado, posta no topo do grupo (sem thread_id)
+  if (threads.size === 0) threads.add(null);
+
   let mainSent = false;
-  try {
-    if (imageUrl) {
-      await tgSend('sendPhoto', TELEGRAM_CHANNEL_ID, imageUrl, {
-        caption,
-        parse_mode: 'MarkdownV2',
-        reply_markup,
-      });
-    } else {
-      await tgSend('sendMessage', TELEGRAM_CHANNEL_ID, caption, {
-        parse_mode: 'MarkdownV2',
-        disable_web_page_preview: false,
-        reply_markup,
-      });
-    }
-    mainSent = true;
-    console.log(`[Telegram] Alerta enviado: ${name} — ${formatPrice(currentPrice)}`);
-  } catch (err) {
-    console.error('[Telegram] Erro ao enviar alerta:', err.message);
-    if (imageUrl) {
-      try {
-        await tgSend('sendMessage', TELEGRAM_CHANNEL_ID, caption, {
-          parse_mode: 'MarkdownV2',
-          disable_web_page_preview: false,
-          reply_markup,
-        });
-        mainSent = true;
-        console.log(`[Telegram] Alerta enviado (sem foto): ${name} — ${formatPrice(currentPrice)}`);
-      } catch (err2) {
-        console.error('[Telegram] Fallback sem foto também falhou:', err2.message);
-      }
+  for (const threadId of threads) {
+    const ok = await postToDest({ threadId, caption, imageUrl, reply_markup });
+    if (ok) {
+      mainSent = true;
+      console.log(`[Telegram] Alerta enviado (thread ${threadId || 'main'}): ${name} — ${formatPrice(currentPrice)}`);
     }
   }
 
-  // Sinaliza pro chamador (index.js) se o alerta foi enviado, pra ele decidir
-  // se grava o preço no histórico (E: salvar preço só se alerta confirmado).
   if (!mainSent) {
     throw new Error('Falha ao enviar alerta após retries');
   }
@@ -333,12 +346,14 @@ async function sendPriceAlert({ productId, name, url, store, category, currentPr
   }
 
   // Envia gráfico de histórico de preço como mensagem separada (best effort)
+  // No mesmo thread do alerta principal (pega o primeiro thread postado).
   const chartUrl = await buildChartUrl(priceHistory);
   if (chartUrl) {
-    await tgSend('sendPhoto', TELEGRAM_CHANNEL_ID, chartUrl, {
-      caption: `📊 *Histórico — ${escapeMarkdown(name)}*`,
-      parse_mode: 'MarkdownV2',
-    }).catch((err) => console.warn('[Chart] Erro ao enviar gráfico:', err.message));
+    const chartOpts = { caption: `📊 *Histórico — ${escapeMarkdown(name)}*`, parse_mode: 'MarkdownV2' };
+    const firstThread = [...threads][0];
+    if (firstThread) chartOpts.message_thread_id = firstThread;
+    await tgSend('sendPhoto', TELEGRAM_DEST_ID, chartUrl, chartOpts)
+      .catch((err) => console.warn('[Chart] Erro ao enviar gráfico:', err.message));
   }
 }
 
@@ -367,19 +382,11 @@ async function sendShowcase({ productId, name, url, store, category, price, imag
   ].join('\n');
 
   const reply_markup = buildProductButtons({ productId, name, url, currentPrice: price, alertType: 'showcase' });
+  const threadId = topic('achadinhos') || topic('geral');
 
-  try {
-    if (imageUrl) {
-      await tgSend('sendPhoto', TELEGRAM_CHANNEL_ID, imageUrl, { caption, parse_mode: 'MarkdownV2', reply_markup });
-    } else {
-      await tgSend('sendMessage', TELEGRAM_CHANNEL_ID, caption, { parse_mode: 'MarkdownV2', disable_web_page_preview: false, reply_markup });
-    }
-    console.log(`[Telegram] Achadinho enviado: ${name} — ${formatPrice(price)}`);
-    return true;
-  } catch (err) {
-    console.error('[Telegram] Erro ao enviar achadinho:', err.message);
-    return false;
-  }
+  const ok = await postToDest({ threadId, caption, imageUrl, reply_markup });
+  if (ok) console.log(`[Telegram] Achadinho enviado (thread ${threadId || 'main'}): ${name} — ${formatPrice(price)}`);
+  return ok;
 }
 
 // Card de oferta com cupom — usado pela rotina de cupons da KaBuM.
@@ -416,18 +423,10 @@ async function sendCouponDeal({ name, url, price, oldPrice, discountPct, stock, 
     ]],
   };
 
-  try {
-    if (image) {
-      await tgSend('sendPhoto', TELEGRAM_CHANNEL_ID, image, { caption, parse_mode: 'MarkdownV2', reply_markup });
-    } else {
-      await tgSend('sendMessage', TELEGRAM_CHANNEL_ID, caption, { parse_mode: 'MarkdownV2', disable_web_page_preview: false, reply_markup });
-    }
-    console.log(`[Telegram] Cupom enviado: ${name} — ${coupon}`);
-    return true;
-  } catch (err) {
-    console.error('[Telegram] Erro ao enviar cupom:', err.message);
-    return false;
-  }
+  const threadId = topic('cupons_kabum') || topic('cupons_geral') || topic('geral');
+  const ok = await postToDest({ threadId, caption, imageUrl: image, reply_markup });
+  if (ok) console.log(`[Telegram] Cupom enviado (thread ${threadId || 'main'}): ${name} — ${coupon}`);
+  return ok;
 }
 
 // Digest consolidado de produtos que voltaram ao estoque (postado 1x/dia).
@@ -462,13 +461,12 @@ async function sendBackInStockDigest(items) {
     ]],
   };
 
+  const threadId = topic('geral');
+  const opts = { parse_mode: 'MarkdownV2', disable_web_page_preview: true, reply_markup };
+  if (threadId) opts.message_thread_id = threadId;
   try {
-    await tgSend('sendMessage', TELEGRAM_CHANNEL_ID, lines.join('\n'), {
-      parse_mode: 'MarkdownV2',
-      disable_web_page_preview: true,
-      reply_markup,
-    });
-    console.log(`[Telegram] Digest back_in_stock enviado: ${items.length} produto(s)`);
+    await tgSend('sendMessage', TELEGRAM_DEST_ID, lines.join('\n'), opts);
+    console.log(`[Telegram] Digest back_in_stock enviado (thread ${threadId || 'main'}): ${items.length} produto(s)`);
     return true;
   } catch (err) {
     console.error('[Telegram] Erro ao enviar digest:', err.message);
@@ -520,13 +518,12 @@ async function sendWeeklyTop(items) {
     ]],
   };
 
+  const threadId = topic('top_semana') || topic('geral');
+  const opts = { parse_mode: 'MarkdownV2', disable_web_page_preview: true, reply_markup };
+  if (threadId) opts.message_thread_id = threadId;
   try {
-    await tgSend('sendMessage', TELEGRAM_CHANNEL_ID, lines.join('\n'), {
-      parse_mode: 'MarkdownV2',
-      disable_web_page_preview: true,
-      reply_markup,
-    });
-    console.log(`[Telegram] TOP semanal enviado: ${items.length} item(s)`);
+    await tgSend('sendMessage', TELEGRAM_DEST_ID, lines.join('\n'), opts);
+    console.log(`[Telegram] TOP semanal enviado (thread ${threadId || 'main'}): ${items.length} item(s)`);
     return true;
   } catch (err) {
     console.error('[Telegram] Erro ao enviar TOP semanal:', err.message);

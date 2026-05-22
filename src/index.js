@@ -92,7 +92,7 @@ async function maybeNotifyLongUnavailable(product) {
 // Retorna: 'ok' (produto disponível), 'fail' (scrape retornou null),
 // 'skip' (em backoff, não foi tentado).
 async function processProduct(product) {
-  const { id, name, url, store, category } = product;
+  const { id, name, url, store, category, is_masc: isMasc = false, is_fem: isFem = false } = product;
 
   // Backoff: produto já indisponível espera UNAVAILABLE_BACKOFF_HOURS antes de novo scan
   const prevUnavailableCount = await getConsecutiveUnavailableCount(id);
@@ -175,7 +175,7 @@ async function processProduct(product) {
       console.log(`[Monitor] 🐛 Enviando alerta de BUG — ${name}: ${currentPrice}`);
       try {
         await sendPriceAlert({
-          productId: id, name, url, store, category,
+          productId: id, name, url, store, category, isMasc, isFem,
           currentPrice, lastPrice, lowestPrice,
           discountPct: dropPct,
           imageUrl, priceHistory,
@@ -249,7 +249,7 @@ async function processProduct(product) {
                           : alertType === 'drop'     ? dropFromLast
                           : 0;
         try {
-          await sendPriceAlert({ productId: id, name, url, store, category, currentPrice, lastPrice, lowestPrice, discountPct, imageUrl, priceHistory, alertType });
+          await sendPriceAlert({ productId: id, name, url, store, category, isMasc, isFem, currentPrice, lastPrice, lowestPrice, discountPct, imageUrl, priceHistory, alertType });
           await registerAlert(id, currentPrice, discountPct);
           recordAlert(alertType);
         } catch (err) {
