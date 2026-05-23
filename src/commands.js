@@ -750,6 +750,56 @@ bot.on('polling_error', (err) => {
   console.warn('[Bot] polling error:', err.code || err.message);
 });
 
+// ── Auto-clean do tópico General ─────────────────────────────────────────────
+// O General (tópico do sistema) recebe automaticamente notificações tipo
+// "X joined the group", "Y changed the photo", etc. Como não dá pra desativar
+// essas mensagens no Telegram, o bot deleta elas automaticamente — mantém o
+// tópico limpo mesmo que ele esteja sendo usado pra outra coisa.
+const AUTO_CLEAN_GENERAL = process.env.AUTO_CLEAN_GENERAL !== 'false';
+const CLEAN_GROUP_ID = process.env.TELEGRAM_GROUP_ID;
+
+if (AUTO_CLEAN_GENERAL && CLEAN_GROUP_ID) {
+  bot.on('message', async (msg) => {
+    if (String(msg.chat.id) !== String(CLEAN_GROUP_ID)) return;
+
+    // General no Telegram não tem message_thread_id (ou tem === 1).
+    // Tópicos normais que você criou têm thread_id > 1.
+    const threadId = msg.message_thread_id;
+    const isGeneral = !threadId || threadId === 1;
+    if (!isGeneral) return;
+
+    // Detecta service messages
+    const isService = !!(
+      msg.new_chat_members ||
+      msg.left_chat_member ||
+      msg.new_chat_title ||
+      msg.new_chat_photo ||
+      msg.delete_chat_photo ||
+      msg.pinned_message ||
+      msg.group_chat_created ||
+      msg.supergroup_chat_created ||
+      msg.channel_chat_created ||
+      msg.message_auto_delete_timer_changed ||
+      msg.forum_topic_created ||
+      msg.forum_topic_edited ||
+      msg.forum_topic_closed ||
+      msg.forum_topic_reopened ||
+      msg.general_forum_topic_hidden ||
+      msg.general_forum_topic_unhidden
+    );
+    if (!isService) return;
+
+    try {
+      await bot.deleteMessage(msg.chat.id, msg.message_id);
+      console.log(`[CleanGeneral] deletou service message ${msg.message_id} do General`);
+    } catch (err) {
+      // 400 com "message to delete not found" ou "message can't be deleted" — ignora
+      console.warn('[CleanGeneral] não consegui deletar:', err.message);
+    }
+  });
+  console.log('[Bot] Auto-clean do General ativado');
+}
+
 // Registra a lista de comandos no Telegram (autocomplete ao digitar "/")
 const PUBLIC_COMMANDS = [
   { command: 'addproduto',     description: 'Adicionar produto pra monitorar (link da loja)' },
