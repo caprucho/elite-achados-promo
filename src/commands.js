@@ -405,6 +405,16 @@ bot.onText(/^\/addproduto\s+(.+)$/, async (msg, match) => {
   }
 
   if (!result) {
+    // Caso especial: Amazon bloqueia IP do servidor há tempos, é problema conhecido
+    if (route.store === 'amazon') {
+      notifyAddProductFailure(msg, url, '🤖 Amazon anti-bot (bloqueia IP do servidor)', `Cadastrar manualmente. URL: ${url}`);
+      return reply(msg,
+        `⚠️ *A Amazon está bloqueando o servidor temporariamente.*\n\n` +
+        `Isso é um problema conhecido — a Amazon detecta o IP do bot e nega o acesso. Estou trabalhando pra resolver (aguardando liberação da API oficial).\n\n` +
+        `📝 *Sua solicitação foi registrada com o admin.* Em breve esse produto será adicionado manualmente.\n\n` +
+        `_Enquanto isso, você pode cadastrar produtos de outras lojas: \`/lojas\` pra ver a lista._`
+      );
+    }
     notifyAddProductFailure(msg, url, 'Scraper retornou null', `Loja: ${route.label}. Possíveis causas: anti-bot, produto indisponível, HTML mudou.`);
     return reply(msg,
       `❌ *Não consegui extrair o preço.*\n\nMotivos possíveis:\n` +
