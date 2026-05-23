@@ -295,6 +295,23 @@ bot.onText(/^\/lojas\b/, async (msg) => {
   await reply(msg, SUPPORTED_LIST);
 });
 
+// Notifica admin no privado quando alguém falha ao cadastrar produto.
+// Inclui motivo + URL + quem tentou, pra você decidir se vale arrumar.
+async function notifyAddProductFailure(msg, url, reason, details = '') {
+  if (!TELEGRAM_ADMIN_USER_ID) return;
+  const userId = String(msg.from.id);
+  const username = msg.from.username || msg.from.first_name || 'desconhecido';
+  const lines = [
+    `⚠️ */addproduto falhou*`,
+    ``,
+    `👤 @${username} (\`${userId}\`)`,
+    `❌ Motivo: *${reason}*`,
+    `🔗 ${url}`,
+  ];
+  if (details) lines.push('', `_${details}_`);
+  sendAdminMessage(lines.join('\n')).catch(() => {});
+}
+
 // ── /addproduto <url> ────────────────────────────────────────────────────────
 bot.onText(/^\/addproduto\s+(.+)$/, async (msg, match) => {
   let url = match[1].trim();
@@ -303,7 +320,8 @@ bot.onText(/^\/addproduto\s+(.+)$/, async (msg, match) => {
 
   // Valida URL
   try { new URL(url); } catch {
-    return reply(msg, '❌ URL inválida. Envie a URL completa do produto.');
+    notifyAddProductFailure(msg, url, 'URL inválida', 'String enviada não é uma URL válida');
+    return reply(msg, '❌ URL inválida. Envie a URL completa do produto (com `https://...`).\n\nExemplo: `/addproduto https://amazon.com.br/dp/B0XYZ`');
   }
 
   // Resolve encurtadores (a.co, amzn.to, amzn.eu) e limpa tracking
@@ -320,17 +338,24 @@ bot.onText(/^\/addproduto\s+(.+)$/, async (msg, match) => {
   // Loja suportada?
   const route = detectStore(url);
   if (!route) {
+    let hostname = '';
+    try { hostname = new URL(url).hostname; } catch {}
+    notifyAddProductFailure(msg, url, 'Loja não suportada', `Hostname: ${hostname}`);
     return reply(msg,
-      `❌ Loja não suportada.\n\n${SUPPORTED_LIST}\n\n` +
-      `Quer registrar como sugestão pra eu avaliar?\n\`/sugerir ${url}\``
+      `❌ *Loja não suportada.*\n\nA loja \`${hostname}\` ainda não tem scraper.\n\n${SUPPORTED_LIST}\n\n` +
+      `💡 *Quer que eu adicione essa loja?* Manda como sugestão:\n\`/sugerir ${url}\`\n\nEu avalio e adiciono se possível.`
     );
   }
 
   // URL de página de produto (não busca/categoria)?
   if (!isLikelyProductUrl(url)) {
+    notifyAddProductFailure(msg, url, 'URL de busca/categoria (não produto)', `Loja: ${route.label}`);
     return reply(msg,
-      `❌ Essa URL parece ser de busca, categoria ou listagem — preciso da URL específica de **um** produto.\n\n` +
-      `Abra o produto no site e copie o link da barra do navegador.`
+      `❌ *Essa URL parece ser de busca, categoria ou listagem.*\n\nPreciso da URL específica de *um* produto, não de uma lista.\n\n` +
+      `💡 *Como pegar a URL certa:*\n` +
+      `1. Abra o produto no site da ${route.label}\n` +
+      `2. Copie o link da barra do navegador\n` +
+      `3. Cola aqui com \`/addproduto <link>\``
     );
   }
 
@@ -375,23 +400,30 @@ bot.onText(/^\/addproduto\s+(.+)$/, async (msg, match) => {
   try {
     result = await getPrice(url);
   } catch (err) {
-    return reply(msg, `❌ Erro ao consultar a loja: ${err.message}`);
+    notifyAddProductFailure(msg, url, 'Erro ao consultar loja (exception)', `${route.label}: ${err.message}`);
+    return reply(msg, `❌ *Erro ao consultar a loja ${route.label}.*\n\nPode ser bloqueio temporário ou produto fora do ar. Tenta de novo em alguns minutos.\n\nSe persistir: \`/sugerir ${url}\``);
   }
 
   if (!result) {
+    notifyAddProductFailure(msg, url, 'Scraper retornou null', `Loja: ${route.label}. Possíveis causas: anti-bot, produto indisponível, HTML mudou.`);
     return reply(msg,
-      '❌ Não consegui extrair o preço. URL errada, produto indisponível, ou bloqueio temporário da loja.\n\n' +
-      `Quer registrar como sugestão? \`/sugerir ${url}\``
+      `❌ *Não consegui extrair o preço.*\n\nMotivos possíveis:\n` +
+      `• Produto indisponível na ${route.label}\n` +
+      `• Bloqueio temporário do site\n` +
+      `• URL apontando pra página errada\n\n` +
+      `💡 Confere se o produto está disponível abrindo o link no navegador. Se estiver, manda como sugestão pra eu investigar:\n\`/sugerir ${url}\``
     );
   }
 
   const { price, name: scrapedName } = result;
 
   if (typeof price !== 'number' || isNaN(price) || price <= 0) {
-    return reply(msg, '❌ O preço retornado é inválido. Pode ser bug do scraper ou produto fora de venda. Tente outra URL.');
+    notifyAddProductFailure(msg, url, 'Preço inválido extraído', `Loja: ${route.label}, raw: ${JSON.stringify(price)}`);
+    return reply(msg, `❌ *Preço inválido retornado.*\n\nO scraper achou um número mas ele não faz sentido (${price}). Pode ser bug do parser ou produto sem preço (esgotado).\n\nTenta outra URL ou: \`/sugerir ${url}\``);
   }
   if (!scrapedName || scrapedName.length < 5) {
-    return reply(msg, '❌ Não consegui ler o nome do produto. URL pode ser de página errada (busca/categoria). Confirme se é a URL específica de um produto.');
+    notifyAddProductFailure(msg, url, 'Nome do produto não extraído', `Loja: ${route.label}, scraped: "${scrapedName}"`);
+    return reply(msg, `❌ *Não consegui ler o nome do produto.*\n\nA URL pode ser de uma página errada (busca, categoria) — preciso da URL específica do produto na ${route.label}.`);
   }
 
   const name = scrapedName;
