@@ -7,15 +7,21 @@
 const BOT_USERNAME = (process.env.TELEGRAM_BOT_USERNAME || 'Elite_Achados_PromoBOT').replace(/^@/, '');
 
 const TIPS = [
-  `🔔 Ative as notificações do canal pra ser o primeiro a ver as ofertas`,
-  `📌 Fixe o canal no topo do Telegram pra não perder nada`,
-  `💎 Quer alerta no SEU produto? /addproduto no @${BOT_USERNAME}`,
-  `🤝 Indique 1 amigo e ganhe +1 slot extra (/convidar)`,
-  `💡 Encontrou uma oferta? Manda pra mim com /sugerir <link>`,
-  `📋 Veja seus produtos cadastrados com /meusprodutos`,
+  `🔔 Ative as notificações do grupo pra ser o primeiro a ver as ofertas`,
+  `📌 Fixe o grupo no topo do Telegram pra não perder nada`,
+  `🎯 Silencie tópicos que não interessam (toque no nome → Mute)`,
+  `💎 Toque em "💎 Monitorar produto" pra receber alerta desse item no privado`,
+  `📦 Quer monitorar SEU produto? /addproduto no @${BOT_USERNAME}`,
+  `🎯 Define um preço-alvo com /avisar <id> <preço> — só te aviso quando bater`,
+  `📊 Veja o histórico de qualquer produto com /preco <id>`,
+  `📋 Liste seus produtos com /meusprodutos`,
+  `🤝 Indique amigos e ganhe slots extras — /convidar pega seu link`,
+  `📤 O botão "Compartilhar" gera link com SEU ref — cada amigo = +1 slot`,
+  `💡 Achou uma oferta? Manda pra mim com /sugerir <link>`,
   `🏆 TOP da semana sai todo domingo 16h — fique de olho`,
   `🎟️ Cupons KaBuM saem 13h e 19h todo dia`,
-  `🛒 Monitoro 14+ lojas — veja todas em /lojas`,
+  `🛒 Monitoro 15+ lojas — veja todas em /lojas`,
+  `ℹ️ /help mostra o guia completo do bot`,
 ];
 
 let idx = Math.floor(Math.random() * TIPS.length);
