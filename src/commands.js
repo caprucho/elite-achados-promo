@@ -758,6 +758,34 @@ bot.on('polling_error', (err) => {
 const AUTO_CLEAN_GENERAL = process.env.AUTO_CLEAN_GENERAL !== 'false';
 const CLEAN_GROUP_ID = process.env.TELEGRAM_GROUP_ID;
 
+// Formata nome do user com fallback (first_name + last_name + @username + id)
+function formatMember(u) {
+  if (!u) return '(desconhecido)';
+  const full = [u.first_name, u.last_name].filter(Boolean).join(' ') || '(sem nome)';
+  const handle = u.username ? `@${u.username}` : `\`${u.id}\``;
+  return `${full} (${handle})`;
+}
+
+// Notifica admin quando alguém entra/sai do grupo
+async function notifyJoinLeave(msg, action, members) {
+  if (!TELEGRAM_ADMIN_USER_ID) return;
+  let total = '?';
+  try {
+    total = await bot.getChatMemberCount(msg.chat.id);
+  } catch {}
+  const lines = [
+    action === 'joined' ? `🟢 *Novo membro no grupo*` : `🔴 *Saiu do grupo*`,
+    ``,
+    ...members.map((m) => `👤 ${formatMember(m)}`),
+    ``,
+    `👥 Total agora: *${total}* membros`,
+  ];
+  if (action === 'joined' && msg.from && !members.some((m) => m.id === msg.from.id)) {
+    lines.push(`➕ Adicionado por ${formatMember(msg.from)}`);
+  }
+  sendAdminMessage(lines.join('\n')).catch(() => {});
+}
+
 if (AUTO_CLEAN_GENERAL && CLEAN_GROUP_ID) {
   bot.on('message', async (msg) => {
     if (String(msg.chat.id) !== String(CLEAN_GROUP_ID)) return;
@@ -789,6 +817,13 @@ if (AUTO_CLEAN_GENERAL && CLEAN_GROUP_ID) {
     );
     if (!isService) return;
 
+    // Antes de deletar, se for join/leave, notifica admin no privado
+    if (msg.new_chat_members?.length) {
+      notifyJoinLeave(msg, 'joined', msg.new_chat_members);
+    } else if (msg.left_chat_member) {
+      notifyJoinLeave(msg, 'left', [msg.left_chat_member]);
+    }
+
     try {
       await bot.deleteMessage(msg.chat.id, msg.message_id);
       console.log(`[CleanGeneral] deletou service message ${msg.message_id} do General`);
@@ -797,7 +832,7 @@ if (AUTO_CLEAN_GENERAL && CLEAN_GROUP_ID) {
       console.warn('[CleanGeneral] não consegui deletar:', err.message);
     }
   });
-  console.log('[Bot] Auto-clean do General ativado');
+  console.log('[Bot] Auto-clean do General + notificação de join/leave ativados');
 }
 
 // Registra a lista de comandos no Telegram (autocomplete ao digitar "/")
