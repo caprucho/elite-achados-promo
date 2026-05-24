@@ -506,16 +506,22 @@ async function removeWatcher(productId, telegramId) {
   if (error) throw new Error(error.message);
 }
 
-async function getWatchers(productId) {
+// Retorna watchers de um produto OPCIONALMENTE filtrados por preço-alvo.
+// Se currentPrice for passado, retorna só watchers que: (a) não têm target,
+// ou (b) têm target >= currentPrice (preço bateu o alvo).
+async function getWatchers(productId, currentPrice = null) {
   const { data, error } = await supabase
     .from('product_watchers')
-    .select('telegram_id')
+    .select('telegram_id, target_price')
     .eq('product_id', productId);
   if (error) {
     console.error('[getWatchers]', error.message);
     return [];
   }
-  return (data || []).map((r) => r.telegram_id);
+  if (currentPrice === null) return (data || []).map((r) => r.telegram_id);
+  return (data || [])
+    .filter((r) => !r.target_price || currentPrice <= Number(r.target_price))
+    .map((r) => r.telegram_id);
 }
 
 async function isWatching(productId, telegramId) {

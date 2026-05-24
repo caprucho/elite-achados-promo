@@ -152,9 +152,29 @@ const CATEGORY_LABELS = {
 };
 
 // Botões padronizados pros cards de produto (alerta, showcase).
-// Recebe productId pra criar o callback button do "Monitorar produto".
-// Se productId for null, o botão vira link genérico pro bot.
+// Recebe productId pra criar callback buttons:
+//   - "💎 Monitorar produto" → watch:<id>  (registra user como watcher)
+//   - "📤 Compartilhar"      → share:<id>  (gera DM com link contendo ref do user)
+// Se productId for null, ambos viram links genéricos pro bot.
 function buildProductButtons({ productId, name, url, currentPrice, alertType, discountPct }) {
+  const shareBtn = productId
+    ? { text: '📤 Compartilhar', callback_data: `share:${productId}` }
+    : { text: '📤 Compartilhar', url: `https://t.me/share/url?url=${encodeURIComponent(url)}&text=${encodeURIComponent(`🔥 ${name}\n${currentPrice ? formatPrice(currentPrice) : ''}\n\nMais ofertas: @${BOT_USERNAME}`)}` };
+
+  const monitorBtn = productId
+    ? { text: '💎 Monitorar produto', callback_data: `watch:${productId}` }
+    : { text: '💎 Monitorar produto', url: `https://t.me/${BOT_USERNAME}` };
+
+  return {
+    inline_keyboard: [
+      [shareBtn, monitorBtn],
+    ],
+  };
+}
+
+// Monta a mensagem de share pra um produto, com o ref do user incluído.
+// Usado pelo callback handler share:<productId>.
+function buildShareMessage({ name, url, currentPrice, alertType, discountPct, referrerId }) {
   const tag = alertType === 'price_bug'
     ? `🐛 BUG DE PREÇO -${(discountPct || 0).toFixed(0)}%`
     : alertType === 'min_beat' || alertType === 'min_hit'
@@ -164,24 +184,10 @@ function buildProductButtons({ productId, name, url, currentPrice, alertType, di
         : alertType === 'showcase'
           ? '🛒 achadinho'
           : `📉 -${(discountPct || 0).toFixed(0)}%`;
-
   const prefix = alertType === 'price_bug' ? '🐛 BUG! Corre!' : '🔥';
   const priceLabel = currentPrice ? formatPrice(currentPrice) : '';
-  const shareText = `${prefix} ${name}\n${priceLabel} (${tag})\n\nMais ofertas e cadastre seus produtos: @${BOT_USERNAME}`;
-  const shareUrl  = `https://t.me/share/url?url=${encodeURIComponent(url)}&text=${encodeURIComponent(shareText)}`;
-
-  const monitorBtn = productId
-    ? { text: '💎 Monitorar produto', callback_data: `watch:${productId}` }
-    : { text: '💎 Monitorar produto', url: `https://t.me/${BOT_USERNAME}` };
-
-  return {
-    inline_keyboard: [
-      [
-        { text: '📤 Compartilhar', url: shareUrl },
-        monitorBtn,
-      ],
-    ],
-  };
+  const refSuffix = referrerId ? `?start=ref_${referrerId}` : '';
+  return `${prefix} ${name}\n${priceLabel} (${tag})\n\nMais ofertas e cadastre seus produtos: https://t.me/${BOT_USERNAME}${refSuffix}`;
 }
 
 // Alias mantido por compat (caso ainda apareça em alguma referência)
@@ -316,10 +322,11 @@ async function sendPriceAlert({ productId, name, url, store, category, currentPr
     throw new Error('Falha ao enviar alerta após retries');
   }
 
-  // Envia DM individual pros watchers desse produto (best effort)
+  // Envia DM individual pros watchers desse produto (best effort).
+  // getWatchers respeita target_price — só recebe quem o produto bateu o alvo.
   if (productId) {
     try {
-      const watchers = await getWatchers(productId);
+      const watchers = await getWatchers(productId, currentPrice);
       if (watchers.length) {
         const dmCaption = caption + `\n\n_⚡ você monitora esse produto — toque pra parar de receber_`;
         const dmKeyboard = {
@@ -543,4 +550,4 @@ async function sendAdminMessage(text, opts = {}) {
   }
 }
 
-module.exports = { sendPriceAlert, sendAdminMessage, sendShowcase, sendCouponDeal, sendBackInStockDigest, sendWeeklyTop };
+module.exports = { sendPriceAlert, sendAdminMessage, sendShowcase, sendCouponDeal, sendBackInStockDigest, sendWeeklyTop, buildShareMessage };

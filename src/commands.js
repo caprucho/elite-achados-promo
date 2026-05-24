@@ -10,8 +10,11 @@ const {
   getWatchedProducts, countWatchedProducts,
 } = require('./db/queries');
 const { getPrice } = require('./scrapers');
-const { sendAdminMessage } = require('./bot/telegram');
+const { sendAdminMessage, buildShareMessage } = require('./bot/telegram');
 const { normalizeUrl } = require('./utils/normalizeUrl');
+const { getAdminStats, getHealthChecks, getProductPriceStats, searchProducts, setWatcherTargetPrice } = require('./utils/adminStats');
+const { supabase } = require('./db/supabase');
+const axios = require('axios');
 
 const { TELEGRAM_BOT_TOKEN, TELEGRAM_ADMIN_USER_ID } = process.env;
 
@@ -138,6 +141,13 @@ function fullGuide(admin) {
     '🗑 `/removerproduto <id>` — para de monitorar um produto',
     '   Ex: `/removerproduto abc-123`',
     '   _(use o ID que aparece em /meusprodutos)_',
+    '',
+    '📊 `/preco <id>` — vê histórico de preço do produto (mínimo, máximo, média)',
+    '   Ex: `/preco abc12345` (aceita só os 8 primeiros chars do ID)',
+    '',
+    '🎯 `/avisar <id> <preço>` — define preço-alvo. Recebe DM SÓ quando o produto bater esse valor.',
+    '   Ex: `/avisar abc12345 1500` — só me avisa quando cair pra R$ 1.500 ou menos',
+    '   Pra remover o filtro: use preço bem alto (ex: 999999)',
     '',
     '💡 `/sugerir <link>` — *sugere um produto pro canal* (sem limite)',
     '   Eu reviso e adiciono se fizer sentido. Pode incluir um comentário:',
@@ -731,6 +741,35 @@ bot.on('callback_query', async (cb) => {
     return;
   }
 
+  // share:<productId> → gera link de share com ref do user e manda no DM dele
+  if (data.startsWith('share:')) {
+    const productId = data.slice(6);
+    try {
+      const { data: p } = await supabase.from('products').select('name, url').eq('id', productId).single();
+      if (!p) {
+        await bot.answerCallbackQuery(cb.id, { text: '❌ Produto não encontrado', show_alert: false });
+        return;
+      }
+      const shareText = buildShareMessage({ name: p.name, url: p.url, referrerId: userId });
+      const shareUrl = `https://t.me/share/url?url=${encodeURIComponent(p.url)}&text=${encodeURIComponent(shareText)}`;
+      await bot.answerCallbackQuery(cb.id, { text: '📩 Mandei o link no seu privado', show_alert: false });
+      bot.sendMessage(userId, [
+        `📤 *Compartilhar com seu link de indicação*`,
+        ``,
+        `Toque no botão abaixo pra compartilhar. Cada amigo que se cadastrar pelo seu link te dá *+1 slot extra*!`,
+      ].join('\n'), {
+        parse_mode: 'Markdown',
+        reply_markup: {
+          inline_keyboard: [[{ text: '📤 Compartilhar agora', url: shareUrl }]],
+        },
+      }).catch(() => {});
+    } catch (err) {
+      console.error('[callback share] erro:', err.message);
+      await bot.answerCallbackQuery(cb.id, { text: '❌ Erro. Tente abrir o bot no privado primeiro.', show_alert: true });
+    }
+    return;
+  }
+
   // unwatch:<productId> → remove watcher (usado em DMs)
   if (data.startsWith('unwatch:')) {
     const productId = data.slice(8);
@@ -744,6 +783,172 @@ bot.on('callback_query', async (cb) => {
   }
 
   await bot.answerCallbackQuery(cb.id, { text: '' }).catch(() => {});
+});
+
+// ── ADMIN: /stats ────────────────────────────────────────────────────────────
+bot.onText(/^\/stats\b/, async (msg) => {
+  if (!isAdmin(msg)) return;
+  try {
+    const s = await getAdminStats();
+    let members = '?';
+    if (process.env.TELEGRAM_GROUP_ID) {
+      try { members = await bot.getChatMemberCount(process.env.TELEGRAM_GROUP_ID); } catch {}
+    }
+    const cats = s.alertsByCategory7d.map((r) => `• ${r.category || '(sem cat)'}: ${r.n}`).join('\n') || '• _nenhum_';
+    const users = s.topUsers.map((r) => `• @${r.added_by_username || r.added_by_telegram_id}: ${r.n}`).join('\n') || '• _nenhum_';
+
+    await reply(msg, [
+      `📊 *STATS — ${new Date().toLocaleDateString('pt-BR')}*`,
+      ``,
+      `👥 Grupo: *${members}* membros`,
+      `📦 Catálogo: *${s.totalProducts}* produtos ativos`,
+      `🔔 Alertas (24h): *${s.alerts24h}*`,
+      ``,
+      `🏪 *Alertas por categoria (7d):*`,
+      cats,
+      ``,
+      `👤 *Top users (cadastros):*`,
+      users,
+      ``,
+      `💎 Watchers: *${s.totalWatchers}* (de *${s.uniqueWatchers}* users)`,
+    ].join('\n'));
+  } catch (err) {
+    await reply(msg, `❌ Erro: ${err.message}`);
+  }
+});
+
+// ── ADMIN: /health ───────────────────────────────────────────────────────────
+bot.onText(/^\/health\b/, async (msg) => {
+  if (!isAdmin(msg)) return;
+  try {
+    const h = await getHealthChecks();
+    const minutesAgo = h.lastScanAt ? Math.floor((Date.now() - new Date(h.lastScanAt).getTime()) / 60000) : '?';
+
+    // Testa ML token
+    let mlOk = false;
+    try {
+      const r = await axios.post('https://api.mercadolibre.com/oauth/token',
+        new URLSearchParams({ grant_type: 'client_credentials', client_id: process.env.ML_APP_ID, client_secret: process.env.ML_CLIENT_SECRET }),
+        { timeout: 5000 });
+      mlOk = !!r.data?.access_token;
+    } catch {}
+
+    // Testa Telegram
+    let tgOk = false;
+    try { tgOk = !!(await bot.getMe()); } catch {}
+
+    await reply(msg, [
+      `🏥 *SISTEMA*`,
+      ``,
+      `⏱️ Última varredura: *há ${minutesAgo} min*`,
+      `${mlOk ? '✅' : '❌'} ML API: *${mlOk ? 'OK' : 'token inválido'}*`,
+      `${tgOk ? '✅' : '❌'} Telegram: *${tgOk ? 'respondendo' : 'offline'}*`,
+      `💾 DB latency: *${h.dbLatency}ms*`,
+      ``,
+      `📦 Produtos em backoff: *${h.productsInBackoff}*`,
+      `🚨 Scans falhos (24h): *${h.failedScans24h}*`,
+      ``,
+      `🤖 *Amazon (24h):*`,
+      `   ✅ OK: ${h.amazonOk24h}`,
+      `   ❌ Falha: ${h.amazonFail24h} (${h.amazonFailPct24h}%)`,
+      h.amazonFailPct24h > 50 ? `\n   ⚠️ Alta taxa de falha — provável bloqueio anti-bot` : '',
+    ].filter(Boolean).join('\n'));
+  } catch (err) {
+    await reply(msg, `❌ Erro: ${err.message}`);
+  }
+});
+
+// ── ADMIN: /buscar <nome> ────────────────────────────────────────────────────
+bot.onText(/^\/buscar\s+(.+)$/, async (msg, match) => {
+  if (!isAdmin(msg)) return;
+  const q = match[1].trim();
+  try {
+    const results = await searchProducts(q, 15);
+    if (!results.length) return reply(msg, `🔍 Nenhum produto encontrado pra _${q}_`);
+    const lines = results.map((r) => `${r.active ? '✅' : '⛔'} \`${r.id.slice(0,8)}\` ${r.name.slice(0,55)} (${r.store})`);
+    await reply(msg, `🔍 *${results.length} produto(s) pra "${q}"*\n\n${lines.join('\n')}`);
+  } catch (err) {
+    await reply(msg, `❌ Erro: ${err.message}`);
+  }
+});
+
+// ── /preco <id> ──────────────────────────────────────────────────────────────
+bot.onText(/^\/pre[cç]o\s+(\S+)/, async (msg, match) => {
+  const productId = match[1].trim().toLowerCase();
+  try {
+    // Aceita ID completo ou primeiros 8 chars
+    let resolvedId = productId;
+    if (productId.length < 36) {
+      const matches = await searchProducts('', 1000); // pega tudo, vai filtrar
+      const found = matches.find((p) => p.id.startsWith(productId));
+      if (!found) return reply(msg, `❌ Produto não encontrado. Use o ID completo ou os primeiros 8 chars.`);
+      resolvedId = found.id;
+    }
+    const s = await getProductPriceStats(resolvedId);
+    if (!s || !s.current_price) return reply(msg, `❌ Produto sem histórico de preço.`);
+
+    const fmt = (n) => Number(n).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
+    const minAtDays = s.min_at ? Math.floor((Date.now() - new Date(s.min_at).getTime()) / 86400000) : '?';
+    const atMin = Math.abs(s.current_price - s.min_price) / s.min_price < 0.02;
+
+    await reply(msg, [
+      `📊 *${s.name}*`,
+      `🏪 ${s.store?.toUpperCase()}`,
+      ``,
+      `💰 *Agora: ${fmt(s.current_price)}*`,
+      `🟢 Mínimo: ${fmt(s.min_price)} _(há ${minAtDays} dias)_`,
+      `🔴 Máximo: ${fmt(s.max_price)}`,
+      `📈 Média 30d: ${fmt(s.avg_30d || s.current_price)}`,
+      `📦 Registros: ${s.count}`,
+      ``,
+      atMin ? `🎯 *Está no MÍNIMO histórico — momento bom de comprar*` : `_Acima do mínimo histórico — espere ou compre se urgente_`,
+      ``,
+      `🛒 [Ver produto](${s.url})`,
+    ].join('\n'), { disable_web_page_preview: true });
+  } catch (err) {
+    await reply(msg, `❌ Erro: ${err.message}`);
+  }
+});
+
+// ── /avisar <id> <preço> ─────────────────────────────────────────────────────
+bot.onText(/^\/avisar\s+(\S+)\s+([\d.,]+)/, async (msg, match) => {
+  const userId = String(msg.from.id);
+  const productId = match[1].trim().toLowerCase();
+  const targetPrice = parseFloat(match[2].replace(',', '.').replace(/[^\d.]/g, ''));
+
+  if (!targetPrice || targetPrice <= 0) {
+    return reply(msg, '❌ Preço inválido. Use: `/avisar <id> <preço>`\nEx: `/avisar abc12345 1500`');
+  }
+
+  try {
+    // Resolve ID (aceita 8 chars)
+    let resolvedId = productId;
+    if (productId.length < 36) {
+      const matches = await searchProducts('', 1000);
+      const found = matches.find((p) => p.id.startsWith(productId));
+      if (!found) return reply(msg, `❌ Produto não encontrado.\nVeja seus produtos com \`/meusprodutos\`.`);
+      resolvedId = found.id;
+    }
+
+    // User precisa estar monitorando o produto
+    if (!(await isWatching(resolvedId, userId))) {
+      return reply(msg, `❌ Você não está monitorando esse produto.\nUse \`/addproduto <link>\` ou toque em "💎 Monitorar produto" no card primeiro.`);
+    }
+
+    const ok = await setWatcherTargetPrice(resolvedId, userId, targetPrice);
+    if (!ok) return reply(msg, `❌ Não consegui setar o preço-alvo.`);
+
+    const fmt = targetPrice.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
+    await reply(msg, [
+      `🎯 *Preço-alvo definido!*`,
+      ``,
+      `Vou te avisar SÓ quando esse produto cair pra *${fmt}* ou menos.`,
+      ``,
+      `_Pra remover o filtro: \`/avisar ${productId} 999999\` (preço muito alto)._`,
+    ].join('\n'));
+  } catch (err) {
+    await reply(msg, `❌ Erro: ${err.message}`);
+  }
 });
 
 bot.on('polling_error', (err) => {
@@ -840,6 +1045,8 @@ const PUBLIC_COMMANDS = [
   { command: 'addproduto',     description: 'Adicionar produto pra monitorar (link da loja)' },
   { command: 'meusprodutos',   description: 'Ver meus produtos cadastrados' },
   { command: 'removerproduto', description: 'Remover um produto seu (use o ID)' },
+  { command: 'preco',          description: 'Ver histórico de preço de um produto (use o ID)' },
+  { command: 'avisar',         description: 'Definir preço-alvo p/ alerta (ex: /avisar abc123 1500)' },
   { command: 'sugerir',        description: 'Sugerir um produto pro canal' },
   { command: 'convidar',       description: 'Pegar seu link de indicação (+slots por amigo)' },
   { command: 'lojas',          description: 'Ver lojas suportadas' },
@@ -849,6 +1056,9 @@ const PUBLIC_COMMANDS = [
 
 const ADMIN_COMMANDS = [
   ...PUBLIC_COMMANDS,
+  { command: 'stats',             description: '[admin] Dashboard com estatísticas' },
+  { command: 'health',            description: '[admin] Diagnóstico do sistema' },
+  { command: 'buscar',            description: '[admin] Buscar produto por nome' },
   { command: 'listarprodutos',    description: '[admin] Listar todos os produtos ativos' },
   { command: 'indisponiveis',     description: '[admin] Listar produtos em backoff' },
   { command: 'postarcupons',      description: '[admin] Postar cupons KaBuM no canal agora' },
