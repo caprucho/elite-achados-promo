@@ -276,6 +276,45 @@ async function reply(msg, text, opts = {}) {
   return bot.sendMessage(msg.chat.id, text, { parse_mode: 'Markdown', ...opts });
 }
 
+// Wrapper que envolve qualquer handler com try/catch robusto.
+// - Loga erro completo no console (vai pro Railway logs)
+// - Manda mensagem amigável pro user com detalhes mínimos
+// - Fallback se o erro original não tiver .message
+// - Tenta sem Markdown se o primeiro envio falhar (caso seja erro de parse)
+function safeHandler(name, handlerFn) {
+  return async (msg, match) => {
+    try {
+      await handlerFn(msg, match);
+    } catch (err) {
+      // Extrai mensagem de erro robustamente — Telegram API pode jogar erros
+      // com formatos diferentes (resposta HTTP, axios error, etc).
+      const errMsg = err?.response?.body?.description
+                  || err?.response?.data?.description
+                  || err?.message
+                  || String(err)
+                  || 'erro desconhecido';
+      console.error(`[Bot] /${name} falhou:`, errMsg);
+      if (err?.stack) console.error(err.stack.split('\n').slice(0, 5).join('\n'));
+
+      // Tenta avisar o user. Sem parse_mode pra evitar erro recursivo de Markdown.
+      try {
+        await bot.sendMessage(msg.chat.id, `❌ Erro no /${name}: ${errMsg.slice(0, 250)}`);
+      } catch (sendErr) {
+        console.error(`[Bot] falha ao avisar user:`, sendErr.message);
+      }
+    }
+  };
+}
+
+// Intercepta bot.onText pra envolver TODOS os handlers com safeHandler
+// automaticamente. Assim cada handler ganha tratamento de erro sem precisar
+// modificar 19 lugares.
+const _originalOnText = bot.onText.bind(bot);
+bot.onText = function (regex, handler) {
+  const name = String(regex).match(/\/(\w+)/)?.[1] || 'cmd';
+  return _originalOnText(regex, safeHandler(name, handler));
+};
+
 // ── /start [ref_<id>], /ajuda — boas-vindas curtas ──────────────────────────
 bot.onText(/^\/(start|ajuda)(?:\s+(\S+))?/, async (msg, match) => {
   const cmd   = match[1];
@@ -823,40 +862,40 @@ bot.on('callback_query', async (cb) => {
 // ── ADMIN: /stats ────────────────────────────────────────────────────────────
 bot.onText(/^\/stats\b/, async (msg) => {
   if (!isAdmin(msg)) return;
-  try {
-    const s = await getAdminStats();
-    let members = '?';
-    if (process.env.TELEGRAM_GROUP_ID) {
-      // Algumas versões do node-telegram-bot-api expõem só getChatMembersCount (legacy)
-      const fn = bot.getChatMemberCount || bot.getChatMembersCount;
-      if (fn) {
-        try { members = await fn.call(bot, process.env.TELEGRAM_GROUP_ID); }
-        catch (err) { console.warn('[stats] count falhou:', err.message); }
-      } else {
-        console.warn('[stats] bot.getChatMemberCount não existe nessa versão');
+  const s = await getAdminStats();
+  let members = '?';
+  if (process.env.TELEGRAM_GROUP_ID) {
+    // chat_id supergroup vem como string com "-100..."; alguns clientes
+    // do node-telegram-bot-api preferem número. Converte se for numérico.
+    let chatId = process.env.TELEGRAM_GROUP_ID;
+    const asNum = parseInt(chatId, 10);
+    if (!isNaN(asNum) && String(asNum) === chatId) chatId = asNum;
+    const fn = bot.getChatMemberCount || bot.getChatMembersCount;
+    if (fn) {
+      try { members = await fn.call(bot, chatId); }
+      catch (err) {
+        console.warn('[stats] count falhou:', err?.response?.body?.description || err?.message);
       }
     }
-    const cats = s.alertsByCategory7d.map((r) => `• ${r.category || '(sem cat)'}: ${r.n}`).join('\n') || '• _nenhum_';
-    const users = s.topUsers.map((r) => `• @${r.added_by_username || r.added_by_telegram_id}: ${r.n}`).join('\n') || '• _nenhum_';
-
-    await reply(msg, [
-      `📊 *STATS — ${new Date().toLocaleDateString('pt-BR')}*`,
-      ``,
-      `👥 Grupo: *${members}* membros`,
-      `📦 Catálogo: *${s.totalProducts}* produtos ativos`,
-      `🔔 Alertas (24h): *${s.alerts24h}*`,
-      ``,
-      `🏪 *Alertas por categoria (7d):*`,
-      cats,
-      ``,
-      `👤 *Top users (cadastros):*`,
-      users,
-      ``,
-      `💎 Watchers: *${s.totalWatchers}* (de *${s.uniqueWatchers}* users)`,
-    ].join('\n'));
-  } catch (err) {
-    await reply(msg, `❌ Erro: ${err.message}`);
   }
+  const cats = s.alertsByCategory7d.map((r) => `• ${r.category || '(sem cat)'}: ${r.n}`).join('\n') || '• _nenhum_';
+  const users = s.topUsers.map((r) => `• @${r.added_by_username || r.added_by_telegram_id}: ${r.n}`).join('\n') || '• _nenhum_';
+
+  await reply(msg, [
+    `📊 *STATS — ${new Date().toLocaleDateString('pt-BR')}*`,
+    ``,
+    `👥 Grupo: *${members}* membros`,
+    `📦 Catálogo: *${s.totalProducts}* produtos ativos`,
+    `🔔 Alertas (24h): *${s.alerts24h}*`,
+    ``,
+    `🏪 *Alertas por categoria (7d):*`,
+    cats,
+    ``,
+    `👤 *Top users (cadastros):*`,
+    users,
+    ``,
+    `💎 Watchers: *${s.totalWatchers}* (de *${s.uniqueWatchers}* users)`,
+  ].join('\n'));
 });
 
 // ── ADMIN: /health ───────────────────────────────────────────────────────────
