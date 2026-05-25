@@ -827,7 +827,14 @@ bot.onText(/^\/stats\b/, async (msg) => {
     const s = await getAdminStats();
     let members = '?';
     if (process.env.TELEGRAM_GROUP_ID) {
-      try { members = await bot.getChatMemberCount(process.env.TELEGRAM_GROUP_ID); } catch {}
+      // Algumas versões do node-telegram-bot-api expõem só getChatMembersCount (legacy)
+      const fn = bot.getChatMemberCount || bot.getChatMembersCount;
+      if (fn) {
+        try { members = await fn.call(bot, process.env.TELEGRAM_GROUP_ID); }
+        catch (err) { console.warn('[stats] count falhou:', err.message); }
+      } else {
+        console.warn('[stats] bot.getChatMemberCount não existe nessa versão');
+      }
     }
     const cats = s.alertsByCategory7d.map((r) => `• ${r.category || '(sem cat)'}: ${r.n}`).join('\n') || '• _nenhum_';
     const users = s.topUsers.map((r) => `• @${r.added_by_username || r.added_by_telegram_id}: ${r.n}`).join('\n') || '• _nenhum_';
@@ -1010,9 +1017,11 @@ function formatMember(u) {
 async function notifyJoinLeave(msg, action, members) {
   if (!TELEGRAM_ADMIN_USER_ID) return;
   let total = '?';
-  try {
-    total = await bot.getChatMemberCount(msg.chat.id);
-  } catch {}
+  const fn = bot.getChatMemberCount || bot.getChatMembersCount;
+  if (fn) {
+    try { total = await fn.call(bot, msg.chat.id); }
+    catch (err) { console.warn('[joinleave] count falhou:', err.message); }
+  }
   const lines = [
     action === 'joined' ? `🟢 *Novo membro no grupo*` : `🔴 *Saiu do grupo*`,
     ``,
