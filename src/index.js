@@ -51,6 +51,11 @@ const REQUEST_DELAY_MS          = parseInt(process.env.REQUEST_DELAY_MS         
 // no ML mexe o preço em R$ 0,01 entre scans, inflando o contador).
 const PRICE_CHANGE_MIN_PCT = parseFloat(process.env.PRICE_CHANGE_MIN_PCT || '0.5'); // 0.5%
 const PRICE_CHANGE_MIN_ABS = parseFloat(process.env.PRICE_CHANGE_MIN_ABS || '1');   // R$ 1
+
+// back_in_stock só posta se preço atual estiver dentro desse limite acima
+// do mínimo histórico. Se voltou caro (ex: Kindle por R$ 1399 quando mín é
+// R$ 1049 = +33%), não é oferta — fica silencioso.
+const BACK_IN_STOCK_MAX_ABOVE_MIN_PCT = parseFloat(process.env.BACK_IN_STOCK_MAX_ABOVE_MIN_PCT || '15');
 function countPriceChanges(history) {
   if (!history || history.length < 2) return 0;
   let n = 0;
@@ -191,14 +196,19 @@ async function processProduct(product) {
     await clearUnavailableAlertSent(id);
     const alreadySent = await wasAlertRecentlySent(id, currentPrice);
     const inCooldown  = await isInAdaptiveCooldown(id);
+    // Só posta se o preço ao voltar estiver dentro de N% do mínimo histórico.
+    // Voltar ao estoque por R$ 1399 quando mín é R$ 1049 não é oferta — é ruim.
+    const aboveMinPct = ((currentPrice - lowestPrice) / lowestPrice) * 100;
+    const tooExpensive = aboveMinPct > BACK_IN_STOCK_MAX_ABOVE_MIN_PCT;
     if (alreadySent) {
       console.log(`[Monitor] back_in_stock dedup — ${name}`);
     } else if (inCooldown) {
       console.log(`[Monitor] 🔇 back_in_stock em cooldown — ${name}`);
+    } else if (tooExpensive) {
+      console.log(`[Monitor] 🔇 back_in_stock muito caro (${aboveMinPct.toFixed(0)}% acima do mín) — ${name}`);
     } else {
       console.log(`[Monitor] Produto voltou ao estoque — ${name}: ${currentPrice} (enfileirado p/ digest)`);
       enqueueBackInStock({ id, name, url, store, category, price: currentPrice, lowestPrice });
-      // Registra no alerts_sent (mesmo no digest) pra dedup e cooldown funcionarem
       await registerAlert(id, currentPrice, 0);
       recordAlert('back_in_stock');
     }

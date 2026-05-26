@@ -19,33 +19,54 @@ async function runWeeklyTop() {
     console.error('[WeeklyTop] Erro ao buscar drops:', err.message);
     return;
   }
-  drops = drops.filter((d) => d.dropPct >= WEEKLY_TOP_MIN_PCT).slice(0, WEEKLY_TOP_LIMIT);
+  // Pré-filtro pelo desconto histórico — pega candidatos com folga (2x o limit)
+  // pra ter margem se algum re-check filtrar
+  drops = drops.filter((d) => d.dropPct >= WEEKLY_TOP_MIN_PCT);
   if (!drops.length) {
     console.log('[WeeklyTop] Nenhuma queda relevante na semana, pulando post');
     return;
   }
 
   // Re-verifica disponibilidade (scraping ao vivo) antes de postar.
-  // Se esgotou (getPrice null), o item entra na lista com tag ESGOTADO.
+  // Atualiza currentPrice + RECALCULA dropPct com preço fresh.
+  // Itens cujo preço voltou a subir ficam fora — não tem desconto AGORA.
   console.log(`[WeeklyTop] Re-verificando ${drops.length} produto(s)...`);
   for (const d of drops) {
     try {
       const r = await getPrice(d.product.url);
       if (r && typeof r.price === 'number' && r.price > 0) {
         d.available = true;
-        d.currentPrice = r.price; // atualiza com preço fresh
+        d.currentPrice = r.price;
+        // ⚠️ CRÍTICO: recalcula desconto com preço fresh, pode virar negativo
+        // (preço subiu desde o pico do desconto da semana)
+        d.dropPct = ((d.weekStartPrice - r.price) / d.weekStartPrice) * 100;
       } else {
         d.available = false;
+        // Esgotados mantêm dropPct histórico — vai aparecer com tag ESGOTADO
       }
     } catch (err) {
       console.warn(`[WeeklyTop] Falha ao re-verificar ${d.product.name}:`, err.message);
-      d.available = false; // conservador: marca como esgotado se scrape falhou
+      d.available = false;
     }
     await new Promise((r) => setTimeout(r, WEEKLY_TOP_RECHECK_DELAY));
   }
 
+  // Filtro PÓS re-check:
+  // - DISPONÍVEIS: precisam AINDA ter desconto >= MIN_PCT (preço pode ter subido)
+  // - ESGOTADOS: sempre entram (querem mostrar oferta perdida)
+  drops = drops.filter((d) => !d.available || d.dropPct >= WEEKLY_TOP_MIN_PCT);
+
+  // Reordena pela queda real (pode ter mudado após re-check)
+  drops.sort((a, b) => b.dropPct - a.dropPct);
+  drops = drops.slice(0, WEEKLY_TOP_LIMIT);
+
+  if (!drops.length) {
+    console.log('[WeeklyTop] Após re-check, nenhum item ainda com desconto. Pulando post.');
+    return;
+  }
+
   const sold = drops.filter((d) => !d.available).length;
-  console.log(`[WeeklyTop] ${drops.length - sold} disponível(eis), ${sold} esgotado(s)`);
+  console.log(`[WeeklyTop] ${drops.length - sold} disponível(eis), ${sold} esgotado(s) — postando`);
 
   try {
     await sendWeeklyTop(drops);
