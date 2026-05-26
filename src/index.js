@@ -1,5 +1,5 @@
 require('dotenv').config();
-const { getActiveProducts, savePrice, getLowestPrice, getLastPrice, wasAlertRecentlySent, registerAlert, getPriceHistory, saveUnavailable, getConsecutiveUnavailableCount, getLastScanAt, getUnavailableStreakStart, wasUnavailableAlertSent, markUnavailableAlertSent, clearUnavailableAlertSent, isInAdaptiveCooldown } = require('./db/queries');
+const { getActiveProducts, savePrice, getLowestPriceRecent, getLastPrice, wasAlertRecentlySent, registerAlert, getPriceHistory, saveUnavailable, getConsecutiveUnavailableCount, getLastScanAt, getUnavailableStreakStart, wasUnavailableAlertSent, markUnavailableAlertSent, clearUnavailableAlertSent, isInAdaptiveCooldown } = require('./db/queries');
 const { getPrice }       = require('./scrapers');
 const { sendPriceAlert, sendAdminMessage } = require('./bot/telegram');
 const { notifyError, recordAlert, recordScan, recordProduct, scheduleDailySummary } = require('./utils/adminAlerts');
@@ -132,7 +132,7 @@ async function processProduct(product) {
 
   const [lastPrice, lowestPrice, priceHistory] = await Promise.all([
     getLastPrice(id),
-    getLowestPrice(id),
+    getLowestPriceRecent(id),
     getPriceHistory(id),
   ]);
 

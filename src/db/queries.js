@@ -56,6 +56,9 @@ async function savePrice(productId, price, isAvailable = true) {
   }
 }
 
+// Mínimo "histórico absoluto" — useful pra `/preco` (mostrar o all-time low).
+// NÃO USAR pra decisão de alerta — o preço normal de um produto pode mudar
+// permanentemente (saiu, voltou mais caro). Use getLowestPriceRecent.
 async function getLowestPrice(productId) {
   const { data, error } = await supabase
     .from('price_history')
@@ -75,6 +78,31 @@ async function getLowestPrice(productId) {
   }
 
   return data.price;
+}
+
+// Mínimo MÓVEL dos últimos N dias — adapta ao "preço normal" atual.
+// Se um produto saiu de R$ 1000 (mín antigo) e voltou pra R$ 1500 pra sempre,
+// depois de 90 dias o mínimo move pra ~R$ 1500. Aí quedas pra R$ 1300 voltam
+// a disparar alerta como -13% legítimo.
+const LOWEST_PRICE_WINDOW_DAYS = parseInt(process.env.LOWEST_PRICE_WINDOW_DAYS || '90', 10);
+
+async function getLowestPriceRecent(productId, days = LOWEST_PRICE_WINDOW_DAYS) {
+  const since = new Date(Date.now() - days * 24 * 3600 * 1000).toISOString();
+  const { data, error } = await supabase
+    .from('price_history')
+    .select('price')
+    .eq('product_id', productId)
+    .eq('is_available', true)
+    .gte('created_at', since)
+    .order('price', { ascending: true })
+    .limit(1)
+    .maybeSingle();
+
+  if (error) {
+    console.error(`[getLowestPriceRecent] Erro para produto ${productId}:`, error.message);
+    return null;
+  }
+  return data?.price ?? null;
 }
 
 async function getLastPrice(productId) {
@@ -577,6 +605,7 @@ module.exports = {
   getActiveProducts,
   savePrice,
   getLowestPrice,
+  getLowestPriceRecent,
   getLastPrice,
   wasAlertRecentlySent,
   registerAlert,

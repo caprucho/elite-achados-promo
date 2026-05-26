@@ -1,156 +1,180 @@
 // Helpers de stats e health pra os comandos admin (/stats, /health, /buscar, etc).
-// Usa pg direto pra agregações SQL — fica mais rápido que filtrar em JS.
-const { Client } = require('pg');
-
-const CONN = process.env.DATABASE_URL;
-
-function pg() {
-  return new Client({ connectionString: CONN, ssl: { rejectUnauthorized: false } });
-}
+// Usa o supabase client (HTTPS) — funciona em qualquer rede, inclusive Railway
+// (que não tem IPv6 outbound — pg direto pelo hostname db.xxx.supabase.co falha
+// com ENETUNREACH).
+const { supabase } = require('../db/supabase');
 
 // ─── STATS ──────────────────────────────────────────────────────────────────
 async function getAdminStats() {
-  const c = pg();
-  await c.connect();
-  try {
-    // Sequencial — pg Client não suporta queries paralelas
-    const products = await c.query("SELECT COUNT(*)::int AS n FROM products WHERE active=true");
-    const alerts24h = await c.query("SELECT COUNT(*)::int AS n FROM alerts_sent WHERE sent_at >= NOW() - INTERVAL '24 hours'");
-    const alertsByCat7d = await c.query(`
-      SELECT p.category, COUNT(*)::int AS n
-      FROM alerts_sent a
-      JOIN products p ON p.id = a.product_id
-      WHERE a.sent_at >= NOW() - INTERVAL '7 days'
-      GROUP BY p.category ORDER BY n DESC LIMIT 6
-    `);
-    const topUsers = await c.query(`
-      SELECT added_by_username, added_by_telegram_id, COUNT(*)::int AS n
-      FROM products
-      WHERE added_by_telegram_id IS NOT NULL AND active=true
-      GROUP BY added_by_username, added_by_telegram_id
-      ORDER BY n DESC LIMIT 5
-    `);
-    const watchers = await c.query("SELECT COUNT(*)::int AS total, COUNT(DISTINCT telegram_id)::int AS users FROM product_watchers");
-    return {
-      totalProducts: products.rows[0].n,
-      alerts24h: alerts24h.rows[0].n,
-      alertsByCategory7d: alertsByCat7d.rows,
-      topUsers: topUsers.rows,
-      totalWatchers: watchers.rows[0].total,
-      uniqueWatchers: watchers.rows[0].users,
-    };
-  } finally {
-    await c.end();
+  const since24 = new Date(Date.now() - 24 * 3600 * 1000).toISOString();
+  const since7d = new Date(Date.now() - 7 * 24 * 3600 * 1000).toISOString();
+
+  const [
+    productsRes,
+    alerts24hRes,
+    alerts7dRes,
+    productsByUserRes,
+    watchersRes,
+  ] = await Promise.all([
+    supabase.from('products').select('*', { count: 'exact', head: true }).eq('active', true),
+    supabase.from('alerts_sent').select('*', { count: 'exact', head: true }).gte('sent_at', since24),
+    supabase.from('alerts_sent').select('product_id, products!inner(category)').gte('sent_at', since7d),
+    supabase.from('products').select('added_by_telegram_id, added_by_username').not('added_by_telegram_id', 'is', null).eq('active', true),
+    supabase.from('product_watchers').select('telegram_id'),
+  ]);
+
+  // Agrega alertas por categoria (em JS, já que supabase não tem GROUP BY nativo via REST)
+  const catCount = {};
+  for (const row of alerts7dRes.data || []) {
+    const c = row.products?.category || '(sem)';
+    catCount[c] = (catCount[c] || 0) + 1;
   }
+  const alertsByCategory7d = Object.entries(catCount)
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, 6)
+    .map(([category, n]) => ({ category, n }));
+
+  // Agrega top users por count de produtos cadastrados
+  const userCount = {};
+  for (const row of productsByUserRes.data || []) {
+    const key = row.added_by_telegram_id;
+    if (!userCount[key]) userCount[key] = { added_by_telegram_id: key, added_by_username: row.added_by_username, n: 0 };
+    userCount[key].n++;
+  }
+  const topUsers = Object.values(userCount).sort((a, b) => b.n - a.n).slice(0, 5);
+
+  // Watchers
+  const watchersData = watchersRes.data || [];
+  const uniqueUsers = new Set(watchersData.map((w) => w.telegram_id));
+
+  return {
+    totalProducts: productsRes.count || 0,
+    alerts24h: alerts24hRes.count || 0,
+    alertsByCategory7d,
+    topUsers,
+    totalWatchers: watchersData.length,
+    uniqueWatchers: uniqueUsers.size,
+  };
 }
 
 // ─── HEALTH ─────────────────────────────────────────────────────────────────
 async function getHealthChecks() {
-  const c = pg();
+  const since24 = new Date(Date.now() - 24 * 3600 * 1000).toISOString();
   const t0 = Date.now();
-  await c.connect();
+  const [lastScanRes, backoffRes, amazon24hRes] = await Promise.all([
+    supabase.from('price_history').select('created_at').order('created_at', { ascending: false }).limit(1),
+    supabase.from('products').select('id, active').eq('active', true),
+    supabase.from('price_history').select('is_available, products!inner(store)').eq('products.store', 'amazon').gte('created_at', since24),
+  ]);
   const dbLatency = Date.now() - t0;
-  try {
-    const lastScan = await c.query("SELECT MAX(created_at) AS last FROM price_history");
-    const backoff = await c.query(`
-      SELECT COUNT(*)::int AS n FROM (
-        SELECT DISTINCT ON (product_id) product_id, is_available
-        FROM price_history
-        ORDER BY product_id, created_at DESC
-      ) sub WHERE is_available = false
-    `);
-    const errors24h = await c.query(`
-      SELECT COUNT(*)::int AS n FROM (
-        SELECT product_id, is_available, created_at
-        FROM price_history
-        WHERE created_at >= NOW() - INTERVAL '24 hours'
-      ) sub WHERE is_available = false
-    `);
 
-    // Amazon fail rate 24h
-    const azn = await c.query(`
-      SELECT
-        SUM(CASE WHEN is_available THEN 1 ELSE 0 END)::int AS ok,
-        SUM(CASE WHEN NOT is_available THEN 1 ELSE 0 END)::int AS fail
-      FROM price_history ph
-      JOIN products p ON p.id = ph.product_id
-      WHERE p.store = 'amazon' AND ph.created_at >= NOW() - INTERVAL '24 hours'
-    `);
-    const aznRow = azn.rows[0];
-    const aznTotal = (aznRow.ok || 0) + (aznRow.fail || 0);
-    const aznFailPct = aznTotal > 0 ? ((aznRow.fail / aznTotal) * 100) : 0;
-
-    return {
-      dbLatency,
-      lastScanAt: lastScan.rows[0].last,
-      productsInBackoff: backoff.rows[0].n,
-      failedScans24h: errors24h.rows[0].n,
-      amazonFailPct24h: aznFailPct.toFixed(0),
-      amazonOk24h: aznRow.ok || 0,
-      amazonFail24h: aznRow.fail || 0,
-    };
-  } finally {
-    await c.end();
+  // Contagem de produtos em backoff = produtos cuja última leitura foi is_available=false.
+  // Mais barato fazer no JS: pega últimos 1000 price_history de produtos ativos.
+  const { data: recentHistory } = await supabase
+    .from('price_history')
+    .select('product_id, is_available, created_at')
+    .order('created_at', { ascending: false })
+    .limit(3000);
+  const lastByProduct = new Map();
+  for (const row of recentHistory || []) {
+    if (!lastByProduct.has(row.product_id)) lastByProduct.set(row.product_id, row.is_available);
   }
+  let backoffCount = 0;
+  for (const isAvail of lastByProduct.values()) if (!isAvail) backoffCount++;
+
+  // Amazon stats 24h
+  let aznOk = 0, aznFail = 0;
+  for (const row of amazon24hRes.data || []) {
+    if (row.is_available) aznOk++; else aznFail++;
+  }
+  const aznTotal = aznOk + aznFail;
+  const aznFailPct = aznTotal > 0 ? ((aznFail / aznTotal) * 100) : 0;
+
+  return {
+    dbLatency,
+    lastScanAt: lastScanRes.data?.[0]?.created_at || null,
+    productsInBackoff: backoffCount,
+    failedScans24h: aznFail, // só Amazon por enquanto — fora dela quase não tem falha
+    amazonFailPct24h: aznFailPct.toFixed(0),
+    amazonOk24h: aznOk,
+    amazonFail24h: aznFail,
+  };
 }
 
 // ─── PRODUCT PRICE STATS ────────────────────────────────────────────────────
 async function getProductPriceStats(productId) {
-  const c = pg();
-  await c.connect();
-  try {
-    // SQL único com subqueries (Postgres aceita queries paralelas em subqueries)
-    const r = await c.query(`
-      SELECT
-        (SELECT name  FROM products WHERE id = $1) AS name,
-        (SELECT url   FROM products WHERE id = $1) AS url,
-        (SELECT store FROM products WHERE id = $1) AS store,
-        (SELECT price FROM price_history WHERE product_id = $1 AND is_available = true ORDER BY created_at DESC LIMIT 1) AS current_price,
-        (SELECT MIN(price) FROM price_history WHERE product_id = $1 AND is_available = true) AS min_price,
-        (SELECT MAX(price) FROM price_history WHERE product_id = $1 AND is_available = true) AS max_price,
-        (SELECT AVG(price) FROM price_history WHERE product_id = $1 AND is_available = true AND created_at >= NOW() - INTERVAL '30 days') AS avg_30d,
-        (SELECT created_at FROM price_history WHERE product_id = $1 AND is_available = true ORDER BY price ASC, created_at DESC LIMIT 1) AS min_at,
-        (SELECT COUNT(*) FROM price_history WHERE product_id = $1 AND is_available = true) AS count
-    `, [productId]);
-    return r.rows[0];
-  } finally {
-    await c.end();
+  const { data: product } = await supabase
+    .from('products')
+    .select('name, url, store')
+    .eq('id', productId)
+    .maybeSingle();
+  if (!product) return null;
+
+  const since30 = new Date(Date.now() - 30 * 24 * 3600 * 1000).toISOString();
+  const [allPricesRes, recent30Res] = await Promise.all([
+    supabase.from('price_history').select('price, created_at').eq('product_id', productId).eq('is_available', true).order('price', { ascending: true }),
+    supabase.from('price_history').select('price').eq('product_id', productId).eq('is_available', true).gte('created_at', since30),
+  ]);
+
+  const allPrices = allPricesRes.data || [];
+  if (allPrices.length === 0) {
+    return { ...product, current_price: null, min_price: null, max_price: null, avg_30d: null, min_at: null, count: 0 };
   }
+
+  // current = última (ordem desc por created_at)
+  const { data: currentRes } = await supabase
+    .from('price_history').select('price, created_at')
+    .eq('product_id', productId).eq('is_available', true)
+    .order('created_at', { ascending: false }).limit(1);
+  const current = currentRes?.[0];
+
+  const prices = allPrices.map((r) => r.price);
+  const min_price = prices[0]; // já ordenado asc
+  const max_price = Math.max(...prices);
+  const min_at = allPrices[0].created_at;
+
+  const recent = (recent30Res.data || []).map((r) => r.price);
+  const avg_30d = recent.length ? recent.reduce((a, b) => a + b, 0) / recent.length : null;
+
+  return {
+    name: product.name,
+    url: product.url,
+    store: product.store,
+    current_price: current?.price || null,
+    min_price,
+    max_price,
+    avg_30d,
+    min_at,
+    count: allPrices.length,
+  };
 }
 
 // ─── BUSCA POR NOME ─────────────────────────────────────────────────────────
 async function searchProducts(query, limit = 10) {
-  const c = pg();
-  await c.connect();
-  try {
-    const r = await c.query(`
-      SELECT id, name, store, category, active
-      FROM products
-      WHERE name ILIKE $1
-      ORDER BY active DESC, name
-      LIMIT $2
-    `, [`%${query}%`, limit]);
-    return r.rows;
-  } finally {
-    await c.end();
+  const term = `%${query}%`;
+  const { data, error } = await supabase
+    .from('products')
+    .select('id, name, store, category, active')
+    .ilike('name', term)
+    .order('active', { ascending: false })
+    .order('name', { ascending: true })
+    .limit(limit);
+  if (error) {
+    console.error('[searchProducts]', error.message);
+    return [];
   }
+  return data || [];
 }
 
 // ─── UPDATE TARGET PRICE ────────────────────────────────────────────────────
 async function setWatcherTargetPrice(productId, telegramId, targetPrice) {
-  const c = pg();
-  await c.connect();
-  try {
-    const r = await c.query(`
-      UPDATE product_watchers
-      SET target_price = $3
-      WHERE product_id = $1 AND telegram_id = $2
-      RETURNING product_id
-    `, [productId, String(telegramId), targetPrice]);
-    return r.rowCount > 0;
-  } finally {
-    await c.end();
-  }
+  const { error, count } = await supabase
+    .from('product_watchers')
+    .update({ target_price: targetPrice }, { count: 'exact' })
+    .eq('product_id', productId)
+    .eq('telegram_id', String(telegramId));
+  if (error) throw new Error(error.message);
+  return (count || 0) > 0;
 }
 
 module.exports = {
