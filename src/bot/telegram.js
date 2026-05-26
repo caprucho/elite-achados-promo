@@ -220,7 +220,7 @@ async function postToDest({ threadId, caption, imageUrl, reply_markup, parse_mod
   }
 }
 
-async function sendPriceAlert({ productId, name, url, store, category, currentPrice, lowestPrice, lastPrice, discountPct, imageUrl, priceHistory = [], alertType = 'minimum', isMasc = false, isFem = false }) {
+async function sendPriceAlert({ productId, name, url, store, category, currentPrice, lowestPrice, lastPrice, normalPrice, allTimeLow, discountPct, imageUrl, priceHistory = [], alertType = 'minimum', isMasc = false, isFem = false }) {
   url = withAffiliateTag(url); // aplica tag de afiliado Amazon (no-op nas outras lojas)
   const storeLabel    = escapeMarkdown(store.toUpperCase());
   const nameLabel     = escapeMarkdown(name);
@@ -230,6 +230,21 @@ async function sendPriceAlert({ productId, name, url, store, category, currentPr
     ? `\n🗂️ _${escapeMarkdown(CATEGORY_LABELS[category])}_`
     : '';
 
+  // Bloco de contexto de preço — mostra normal + mínimo histórico pra
+  // dar referência ao membro decidir se vale a pena. Só inclui se tiver
+  // diferença significativa do preço atual (senão é poluição).
+  const ctxLines = [];
+  if (normalPrice && normalPrice > currentPrice * 1.01) {
+    const offFromNormal = ((normalPrice - currentPrice) / normalPrice * 100).toFixed(0);
+    ctxLines.push(`📊 Preço normal: ${escapeMarkdown(formatPrice(normalPrice))} _\\(\\-${offFromNormal}% agora\\)_`);
+  }
+  if (allTimeLow && allTimeLow < currentPrice * 0.99) {
+    ctxLines.push(`🏆 Mínimo histórico: ${escapeMarkdown(formatPrice(allTimeLow))}`);
+  } else if (allTimeLow && Math.abs(currentPrice - allTimeLow) / allTimeLow < 0.01) {
+    ctxLines.push(`🏆 _Igual ao mínimo histórico_`);
+  }
+  const ctxBlock = ctxLines.length ? `\n${ctxLines.join('\n')}\n` : '';
+
   let caption;
   if (alertType === 'min_beat') {
     caption = [
@@ -237,32 +252,32 @@ async function sendPriceAlert({ productId, name, url, store, category, currentPr
       ``,
       `📦 *${nameLabel}*`,
       ``,
-      `💰 Preço atual: *${escapeMarkdown(formatPrice(currentPrice))}*`,
+      `💰 Preço agora: *${escapeMarkdown(formatPrice(currentPrice))}* _\\(\\-${pctLabel}% vs mínimo\\)_`,
       `📉 Mínimo anterior: ~${escapeMarkdown(formatPrice(lowestPrice))}~`,
-      `🏷️ *${pctLabel}%* abaixo do menor preço já registrado`,
-      ``,
+      ctxBlock.trim() ? ctxBlock.trimStart() : '',
       `🛒 [Ver oferta](${safeUrl})${categoryLine}`,
-    ].join('\n');
+    ].filter(Boolean).join('\n');
   } else if (alertType === 'min_hit') {
     caption = [
       `🎯 *MÍNIMO HISTÓRICO ATINGIDO — ${storeLabel}*`,
       ``,
       `📦 *${nameLabel}*`,
       ``,
-      `💰 Preço atual: *${escapeMarkdown(formatPrice(currentPrice))}*`,
+      `💰 Preço agora: *${escapeMarkdown(formatPrice(currentPrice))}*`,
       `📌 Igual ao menor preço já registrado`,
-      ``,
+      ctxBlock.trim() ? ctxBlock.trimStart() : '',
       `🛒 [Ver oferta](${safeUrl})${categoryLine}`,
-    ].join('\n');
+    ].filter(Boolean).join('\n');
   } else if (alertType === 'back_in_stock') {
     const lines = [
       `🟢 *PRODUTO DE VOLTA AO ESTOQUE — ${storeLabel}*`,
       ``,
       `📦 *${nameLabel}*`,
       ``,
-      `💰 Preço atual: *${escapeMarkdown(formatPrice(currentPrice))}*`,
+      `💰 Preço agora: *${escapeMarkdown(formatPrice(currentPrice))}*`,
     ];
-    if (lowestPrice) lines.push(`📌 Mínimo histórico: ${escapeMarkdown(formatPrice(lowestPrice))}`);
+    if (ctxBlock.trim()) lines.push(ctxBlock.trimStart().trimEnd());
+    else if (lowestPrice) lines.push(`🏆 Mínimo histórico: ${escapeMarkdown(formatPrice(lowestPrice))}`);
     lines.push(``, `🛒 [Ver oferta](${safeUrl})${categoryLine}`);
     caption = lines.join('\n');
   } else if (alertType === 'price_bug') {
@@ -272,27 +287,25 @@ async function sendPriceAlert({ productId, name, url, store, category, currentPr
       `🚨 *${storeLabel}*`,
       `📦 *${nameLabel}*`,
       ``,
-      `💸 Preço agora: *${escapeMarkdown(formatPrice(currentPrice))}*`,
-      `💰 Preço normal: ~${escapeMarkdown(formatPrice(lastPrice))}~`,
-      `🔥 *${pctLabel}%* abaixo do preço normal`,
-      ``,
+      `💸 Preço agora: *${escapeMarkdown(formatPrice(currentPrice))}* _\\(\\-${pctLabel}%\\)_`,
+      `💰 Preço anterior: ~${escapeMarkdown(formatPrice(lastPrice))}~`,
+      ctxBlock.trim() ? ctxBlock.trimStart() : '',
       `⚠️ _Pode ser erro do site\\. Se for real, esgota em minutos\\._`,
       `⚡ *CONFIRME ANTES DE FECHAR — corre\\!*`,
       ``,
       `🛒 [VER OFERTA AGORA](${safeUrl})${categoryLine}`,
-    ].join('\n');
+    ].filter(Boolean).join('\n');
   } else {
     caption = [
       `📉 *QUEDA BRUSCA DE PREÇO — ${storeLabel}*`,
       ``,
       `📦 *${nameLabel}*`,
       ``,
-      `💰 Preço atual: *${escapeMarkdown(formatPrice(currentPrice))}*`,
+      `💰 Preço agora: *${escapeMarkdown(formatPrice(currentPrice))}* _\\(\\-${pctLabel}%\\)_`,
       `⬇️ Preço anterior: ~${escapeMarkdown(formatPrice(lastPrice))}~`,
-      `🏷️ Queda de *${pctLabel}%* desde o último scan`,
-      ``,
+      ctxBlock.trim() ? ctxBlock.trimStart() : '',
       `🛒 [Ver oferta](${safeUrl})${categoryLine}`,
-    ].join('\n');
+    ].filter(Boolean).join('\n');
   }
 
   // Dica rotativa no final (engaja sem poluir muito)

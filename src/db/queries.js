@@ -86,6 +86,30 @@ async function getLowestPrice(productId) {
 // a disparar alerta como -13% legítimo.
 const LOWEST_PRICE_WINDOW_DAYS = parseInt(process.env.LOWEST_PRICE_WINDOW_DAYS || '90', 10);
 
+// Pega contexto pra enriquecer alerta: preço normal (mediana 30d, resistente
+// a outliers vs média) + mínimo histórico absoluto. Usado pra mostrar
+// "preço normal R$ X, mínimo R$ Y, agora R$ Z (-N%)" nos cards.
+async function getPriceContext(productId) {
+  const since30 = new Date(Date.now() - 30 * 24 * 3600 * 1000).toISOString();
+  const [lowAllTime, recent30] = await Promise.all([
+    supabase.from('price_history')
+      .select('price').eq('product_id', productId).eq('is_available', true)
+      .order('price', { ascending: true }).limit(1).maybeSingle(),
+    supabase.from('price_history')
+      .select('price').eq('product_id', productId).eq('is_available', true)
+      .gte('created_at', since30),
+  ]);
+  const allTimeLow = lowAllTime.data?.price ?? null;
+  const prices = (recent30.data || []).map((r) => Number(r.price)).filter((p) => p > 0).sort((a, b) => a - b);
+  let normalPrice = null;
+  if (prices.length > 0) {
+    // Mediana — resistente a outliers (promoção que disparou o alerta)
+    const mid = Math.floor(prices.length / 2);
+    normalPrice = prices.length % 2 ? prices[mid] : (prices[mid - 1] + prices[mid]) / 2;
+  }
+  return { allTimeLow, normalPrice };
+}
+
 async function getLowestPriceRecent(productId, days = LOWEST_PRICE_WINDOW_DAYS) {
   const since = new Date(Date.now() - days * 24 * 3600 * 1000).toISOString();
   const { data, error } = await supabase
@@ -606,6 +630,7 @@ module.exports = {
   savePrice,
   getLowestPrice,
   getLowestPriceRecent,
+  getPriceContext,
   getLastPrice,
   wasAlertRecentlySent,
   registerAlert,

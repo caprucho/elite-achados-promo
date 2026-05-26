@@ -1,5 +1,5 @@
 require('dotenv').config();
-const { getActiveProducts, savePrice, getLowestPriceRecent, getLastPrice, wasAlertRecentlySent, registerAlert, getPriceHistory, saveUnavailable, getConsecutiveUnavailableCount, getLastScanAt, getUnavailableStreakStart, wasUnavailableAlertSent, markUnavailableAlertSent, clearUnavailableAlertSent, isInAdaptiveCooldown } = require('./db/queries');
+const { getActiveProducts, savePrice, getLowestPriceRecent, getLastPrice, wasAlertRecentlySent, registerAlert, getPriceHistory, saveUnavailable, getConsecutiveUnavailableCount, getLastScanAt, getUnavailableStreakStart, wasUnavailableAlertSent, markUnavailableAlertSent, clearUnavailableAlertSent, isInAdaptiveCooldown, getPriceContext } = require('./db/queries');
 const { getPrice }       = require('./scrapers');
 const { sendPriceAlert, sendAdminMessage } = require('./bot/telegram');
 const { notifyError, recordAlert, recordScan, recordProduct, scheduleDailySummary } = require('./utils/adminAlerts');
@@ -177,11 +177,13 @@ async function processProduct(product) {
     const alreadySent = await wasAlertRecentlySent(id, currentPrice);
     if (!alreadySent) {
       const dropPct = ((lastPrice - currentPrice) / lastPrice) * 100;
+      const ctx = await getPriceContext(id);
       console.log(`[Monitor] 🐛 Enviando alerta de BUG — ${name}: ${currentPrice}`);
       try {
         await sendPriceAlert({
           productId: id, name, url, store, category, isMasc, isFem,
           currentPrice, lastPrice, lowestPrice,
+          normalPrice: ctx.normalPrice, allTimeLow: ctx.allTimeLow,
           discountPct: dropPct,
           imageUrl, priceHistory,
           alertType: 'price_bug',
@@ -258,8 +260,9 @@ async function processProduct(product) {
         const discountPct = alertType === 'min_beat' ? discountFromMin
                           : alertType === 'drop'     ? dropFromLast
                           : 0;
+        const ctx = await getPriceContext(id);
         try {
-          await sendPriceAlert({ productId: id, name, url, store, category, isMasc, isFem, currentPrice, lastPrice, lowestPrice, discountPct, imageUrl, priceHistory, alertType });
+          await sendPriceAlert({ productId: id, name, url, store, category, isMasc, isFem, currentPrice, lastPrice, lowestPrice, normalPrice: ctx.normalPrice, allTimeLow: ctx.allTimeLow, discountPct, imageUrl, priceHistory, alertType });
           await registerAlert(id, currentPrice, discountPct);
           recordAlert(alertType);
         } catch (err) {
