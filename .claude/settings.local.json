@@ -2,7 +2,9 @@
   "permissions": {
     "allow": [
       "Skill(schedule)",
-      "Skill(schedule:*)"
+      "Skill(schedule:*)",
+      "PowerShell(Select-String -Path \"c:\\\\Users\\\\capru\\\\OneDrive\\\\Desktop\\\\VsCode\\\\ELITE_Achados_Promo\\\\.env\" -Pattern \"tag|amazon|afiliad|associate|elitepromo|eliteofertas\" -CaseSensitive:$false | ForEach-Object { \"$\\($_.LineNumber\\): $\\($_.Line\\)\" })",
+      "PowerShell(Get-Content \"c:\\\\Users\\\\capru\\\\OneDrive\\\\Desktop\\\\VsCode\\\\ELITE_Achados_Promo\\\\.env\" | Select-Object -Skip 28 -First 12 | ForEach-Object -Begin {$i=29} -Process { \"$i : $_\"; $i++ })"
     ]
   }
 }

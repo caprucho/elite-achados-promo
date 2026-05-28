@@ -110,6 +110,74 @@ async function getPriceContext(productId) {
   return { allTimeLow, normalPrice };
 }
 
+// Score (0-10) + raridade da oferta pra dar contexto inteligente no card.
+// Score baseado em: % abaixo da mediana 30d + bônus se é mínimo histórico
+//                 + bônus por raridade.
+// Raridade: quantas leituras nos últimos 90d ficaram dentro de ±2% do preço
+// atual. Quanto menor a contagem, mais rara a oferta.
+async function getOfferIntelligence(productId, currentPrice) {
+  const since90 = new Date(Date.now() - 90 * 24 * 3600 * 1000).toISOString();
+  const since30 = new Date(Date.now() - 30 * 24 * 3600 * 1000).toISOString();
+  const [allTime, recent30, recent90] = await Promise.all([
+    supabase.from('price_history')
+      .select('price').eq('product_id', productId).eq('is_available', true)
+      .order('price', { ascending: true }).limit(1).maybeSingle(),
+    supabase.from('price_history')
+      .select('price').eq('product_id', productId).eq('is_available', true)
+      .gte('created_at', since30),
+    supabase.from('price_history')
+      .select('price').eq('product_id', productId).eq('is_available', true)
+      .gte('created_at', since90),
+  ]);
+
+  const allTimeLow = allTime.data?.price ?? null;
+  const prices30 = (recent30.data || []).map((r) => Number(r.price)).filter((p) => p > 0).sort((a, b) => a - b);
+  const prices90 = (recent90.data || []).map((r) => Number(r.price)).filter((p) => p > 0);
+
+  // Mediana 30d
+  let median30 = null;
+  if (prices30.length) {
+    const mid = Math.floor(prices30.length / 2);
+    median30 = prices30.length % 2 ? prices30[mid] : (prices30[mid - 1] + prices30[mid]) / 2;
+  }
+
+  // Raridade: quantas leituras 90d ficaram em ±2% do preço atual
+  const tol = currentPrice * 0.02;
+  const rarityCount = prices90.filter((p) => Math.abs(p - currentPrice) <= tol).length;
+
+  let rarityLabel;
+  if (rarityCount <= 1) rarityLabel = 'extremamente rara';
+  else if (rarityCount <= 5) rarityLabel = 'rara';
+  else if (rarityCount <= 15) rarityLabel = 'ocasional';
+  else rarityLabel = 'frequente';
+
+  // Score 0-10:
+  // - até 6 pontos: % abaixo da mediana 30d (0 a 30%+)
+  // - até 3 pontos: bônus se está em/abaixo do mínimo histórico
+  // - até 2 pontos: bônus por raridade
+  let score = 0;
+  if (median30 && median30 > currentPrice) {
+    const offFromMedian = ((median30 - currentPrice) / median30) * 100;
+    score += Math.min(6, offFromMedian / 5); // 30%+ off da mediana = 6 pts
+  }
+  if (allTimeLow !== null) {
+    if (currentPrice <= allTimeLow * 1.005) score += 3; // está no mín histórico
+    else if (currentPrice <= allTimeLow * 1.05) score += 1; // até 5% acima
+  }
+  if (rarityCount <= 1) score += 2;
+  else if (rarityCount <= 5) score += 1;
+  score = Math.min(10, Math.max(0, Math.round(score * 10) / 10));
+
+  let scoreLabel;
+  if (score >= 8.5) scoreLabel = 'IMPERDÍVEL';
+  else if (score >= 7) scoreLabel = 'muito boa';
+  else if (score >= 5) scoreLabel = 'boa';
+  else if (score >= 3) scoreLabel = 'ok';
+  else scoreLabel = 'fraca';
+
+  return { score, scoreLabel, rarityCount, rarityLabel, median30, allTimeLow };
+}
+
 async function getLowestPriceRecent(productId, days = LOWEST_PRICE_WINDOW_DAYS) {
   const since = new Date(Date.now() - days * 24 * 3600 * 1000).toISOString();
   const { data, error } = await supabase
@@ -499,7 +567,7 @@ async function getWeeklyTopDrops(limit = 5) {
   const since = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString();
 
   const [productsRes, historyRes] = await Promise.all([
-    supabase.from('products').select('id, name, url, store').eq('active', true),
+    supabase.from('products').select('id, name, url, store, category').eq('active', true),
     supabase.from('price_history').select('product_id, price, created_at')
       .eq('is_available', true)
       .gte('created_at', since)
@@ -532,6 +600,16 @@ async function getWeeklyTopDrops(limit = 5) {
 
   drops.sort((a, b) => b.dropPct - a.dropPct);
   return drops.slice(0, limit);
+}
+
+// Lista telegram_ids únicos de quem é watcher de algum produto.
+// Usado pelo cron de recomendações personalizadas.
+async function getDistinctWatcherIds() {
+  const { data, error } = await supabase
+    .from('product_watchers')
+    .select('telegram_id');
+  if (error) return [];
+  return [...new Set((data || []).map((r) => r.telegram_id))];
 }
 
 // ─── Watchers (alertas privados pra produtos individuais) ───────────────────
@@ -631,6 +709,7 @@ module.exports = {
   getLowestPrice,
   getLowestPriceRecent,
   getPriceContext,
+  getOfferIntelligence,
   getLastPrice,
   wasAlertRecentlySent,
   registerAlert,
@@ -640,6 +719,7 @@ module.exports = {
   addProduct,
   deactivateProduct,
   getWeeklyTopDrops,
+  getDistinctWatcherIds,
   countProductsByUser,
   getProductsByUser,
   findProductByIdAndUser,

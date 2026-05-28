@@ -685,6 +685,47 @@ bot.onText(/^\/listarprodutos\b/, async (msg) => {
   if (block.trim()) await reply(msg, block);
 });
 
+// ── ADMIN: /topsemana_debug ──────────────────────────────────────────────────
+bot.onText(/^\/topsemana_debug\b/, async (msg) => {
+  if (!isAdmin(msg)) return;
+  await reply(msg, '⏳ Analisando drops da semana...');
+  try {
+    const { getWeeklyTopDrops } = require('./db/queries');
+    const drops = await getWeeklyTopDrops(10);
+    if (!drops.length) {
+      await reply(msg, '❌ Nenhum drop encontrado');
+      return;
+    }
+    const lines = ['📊 *DEBUG: TOP DROPS BRUTO DO BANCO*', ''];
+    for (let i = 0; i < drops.length; i++) {
+      const d = drops[i];
+      const fmt = (p) => (p || 0).toFixed(2);
+      lines.push(`${i+1}\\. ${d.product.name.slice(0,40)}`);
+      lines.push(`   weekStartPrice: R\\$ ${fmt(d.weekStartPrice)}`);
+      lines.push(`   currentPrice: R\\$ ${fmt(d.currentPrice)}`);
+      lines.push(`   dropPct: ${fmt(d.dropPct)}%`);
+      lines.push(`   calc: (${fmt(d.weekStartPrice)} \\- ${fmt(d.currentPrice)}) / ${fmt(d.weekStartPrice)} \\* 100 = ${fmt((d.weekStartPrice - d.currentPrice) / d.weekStartPrice * 100)}%`);
+      lines.push('');
+    }
+    await reply(msg, lines.join('\n'));
+  } catch (err) {
+    await reply(msg, `❌ Erro: ${err.message}`);
+  }
+});
+
+// ── ADMIN: /recomendar ───────────────────────────────────────────────────────
+bot.onText(/^\/recomendar\b/, async (msg) => {
+  if (!isAdmin(msg)) return;
+  await reply(msg, '⏳ Disparando recomendações personalizadas pra todos os watchers...');
+  try {
+    const { runPersonalRecommendations } = require('./personalRecommendations');
+    await runPersonalRecommendations();
+    await reply(msg, '✅ Concluído. Veja o log pra detalhes.');
+  } catch (err) {
+    await reply(msg, `❌ Erro: ${err.message}`);
+  }
+});
+
 // ── ADMIN: /topsemana ────────────────────────────────────────────────────────
 bot.onText(/^\/topsemana\b/, async (msg) => {
   if (!isAdmin(msg)) return;
@@ -1146,6 +1187,7 @@ const ADMIN_COMMANDS = [
   { command: 'indisponiveis',     description: '[admin] Listar produtos em backoff' },
   { command: 'postarcupons',      description: '[admin] Postar cupons KaBuM no canal agora' },
   { command: 'topsemana',         description: '[admin] Postar TOP da semana no canal agora' },
+  { command: 'recomendar',        description: '[admin] Disparar recomendações personalizadas (DM)' },
   { command: 'sugestoes',         description: '[admin] Ver sugestões pendentes' },
   { command: 'aprovarsugestao',   description: '[admin] Aprovar sugestão pelo ID' },
   { command: 'rejeitarsugestao',  description: '[admin] Rejeitar sugestão pelo ID' },

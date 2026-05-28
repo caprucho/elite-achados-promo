@@ -13,7 +13,7 @@ const TELEGRAM_DEST_ID = process.env.TELEGRAM_GROUP_ID || process.env.TELEGRAM_C
 const BOT_USERNAME = (process.env.TELEGRAM_BOT_USERNAME || 'Elite_Achados_PromoBOT').replace(/^@/, '');
 const ALERT_SEND_DELAY_MS  = parseInt(process.env.ALERT_SEND_DELAY_MS  || '1500', 10);
 const ALERT_MAX_RETRIES    = parseInt(process.env.ALERT_MAX_RETRIES    || '5', 10);
-const AMAZON_AFFILIATE_TAG = process.env.AMAZON_AFFILIATE_TAG || 'elitepromo06-20';
+const AMAZON_AFFILIATE_TAG = process.env.AMAZON_AFFILIATE_TAG || 'eliteofertas9-20';
 
 // Reescreve URL da Amazon com a tag de afiliado (Amazon Associates).
 // Toda compra a partir desse link gera comissão. Outras lojas: URL intacta.
@@ -220,93 +220,93 @@ async function postToDest({ threadId, caption, imageUrl, reply_markup, parse_mod
   }
 }
 
-async function sendPriceAlert({ productId, name, url, store, category, currentPrice, lowestPrice, lastPrice, normalPrice, allTimeLow, discountPct, imageUrl, priceHistory = [], alertType = 'minimum', isMasc = false, isFem = false }) {
+async function sendPriceAlert({ productId, name, url, store, category, currentPrice, lowestPrice, lastPrice, normalPrice, allTimeLow, score, scoreLabel, rarityCount, rarityLabel, discountPct, imageUrl, priceHistory = [], alertType = 'minimum', isMasc = false, isFem = false }) {
   url = withAffiliateTag(url); // aplica tag de afiliado Amazon (no-op nas outras lojas)
   const storeLabel    = escapeMarkdown(store.toUpperCase());
   const nameLabel     = escapeMarkdown(name);
   const pctLabel      = escapeMarkdown((discountPct || 0).toFixed(1));
   const safeUrl       = escapeMdUrl(url);
   const categoryLine  = category && CATEGORY_LABELS[category]
-    ? `\n🗂️ _${escapeMarkdown(CATEGORY_LABELS[category])}_`
+    ? `🗂️ _${escapeMarkdown(CATEGORY_LABELS[category])}_`
     : '';
+  const fmt = (p) => escapeMarkdown(formatPrice(p));
 
-  // Bloco de contexto de preço — mostra normal + mínimo histórico pra
-  // dar referência ao membro decidir se vale a pena. Só inclui se tiver
-  // diferença significativa do preço atual (senão é poluição).
+  // Header específico por tipo de alerta
+  const headers = {
+    min_beat:      `🏆 *NOVO MÍNIMO HISTÓRICO — ${storeLabel}*`,
+    min_hit:       `🎯 *MÍNIMO HISTÓRICO ATINGIDO — ${storeLabel}*`,
+    back_in_stock: `🟢 *PRODUTO DE VOLTA AO ESTOQUE — ${storeLabel}*`,
+    price_bug:     `🐛🐛🐛 *POSSÍVEL BUG DE PREÇO\\!* 🐛🐛🐛\n🚨 *${storeLabel}*`,
+  };
+  const header = headers[alertType] || `📉 *QUEDA BRUSCA DE PREÇO — ${storeLabel}*`;
+
+  // Linha de preço principal
+  let priceLines;
+  if (alertType === 'min_beat') {
+    priceLines = [
+      `💰 *Preço agora: ${fmt(currentPrice)}* _\\(\\-${pctLabel}% vs mínimo\\)_`,
+      `📉 Mínimo anterior: ~${fmt(lowestPrice)}~`,
+    ];
+  } else if (alertType === 'min_hit') {
+    priceLines = [`💰 *Preço agora: ${fmt(currentPrice)}*`];
+  } else if (alertType === 'back_in_stock') {
+    priceLines = [`💰 *Preço agora: ${fmt(currentPrice)}*`];
+  } else if (alertType === 'price_bug') {
+    priceLines = [
+      `💸 *Preço agora: ${fmt(currentPrice)}* _\\(\\-${pctLabel}%\\)_`,
+      `⬇️ Preço anterior: ~${fmt(lastPrice)}~`,
+    ];
+  } else {
+    priceLines = [
+      `💰 *Preço agora: ${fmt(currentPrice)}* _\\(\\-${pctLabel}%\\)_`,
+      `⬇️ Preço anterior: ~${fmt(lastPrice)}~`,
+    ];
+  }
+
+  // Bloco de contexto (preço normal + mínimo histórico)
+  // Não duplica info — se header já diz "mínimo atingido", omite "Igual ao mín"
   const ctxLines = [];
   if (normalPrice && normalPrice > currentPrice * 1.01) {
     const offFromNormal = ((normalPrice - currentPrice) / normalPrice * 100).toFixed(0);
-    ctxLines.push(`📊 Preço normal: ${escapeMarkdown(formatPrice(normalPrice))} _\\(\\-${offFromNormal}% agora\\)_`);
+    ctxLines.push(`📊 Preço normal: ${fmt(normalPrice)} _\\(\\-${offFromNormal}% agora\\)_`);
   }
+  const headerAlreadyMin = alertType === 'min_beat' || alertType === 'min_hit';
   if (allTimeLow && allTimeLow < currentPrice * 0.99) {
-    ctxLines.push(`🏆 Mínimo histórico: ${escapeMarkdown(formatPrice(allTimeLow))}`);
-  } else if (allTimeLow && Math.abs(currentPrice - allTimeLow) / allTimeLow < 0.01) {
+    ctxLines.push(`🏆 Mínimo histórico: ${fmt(allTimeLow)}`);
+  } else if (allTimeLow && Math.abs(currentPrice - allTimeLow) / allTimeLow < 0.01 && !headerAlreadyMin) {
     ctxLines.push(`🏆 _Igual ao mínimo histórico_`);
   }
-  const ctxBlock = ctxLines.length ? `\n${ctxLines.join('\n')}\n` : '';
 
-  let caption;
-  if (alertType === 'min_beat') {
-    caption = [
-      `🏆 *NOVO MÍNIMO HISTÓRICO — ${storeLabel}*`,
-      ``,
-      `📦 *${nameLabel}*`,
-      ``,
-      `💰 Preço agora: *${escapeMarkdown(formatPrice(currentPrice))}* _\\(\\-${pctLabel}% vs mínimo\\)_`,
-      `📉 Mínimo anterior: ~${escapeMarkdown(formatPrice(lowestPrice))}~`,
-      ctxBlock.trim() ? ctxBlock.trimStart() : '',
-      `🛒 [Ver oferta](${safeUrl})${categoryLine}`,
-    ].filter(Boolean).join('\n');
-  } else if (alertType === 'min_hit') {
-    caption = [
-      `🎯 *MÍNIMO HISTÓRICO ATINGIDO — ${storeLabel}*`,
-      ``,
-      `📦 *${nameLabel}*`,
-      ``,
-      `💰 Preço agora: *${escapeMarkdown(formatPrice(currentPrice))}*`,
-      `📌 Igual ao menor preço já registrado`,
-      ctxBlock.trim() ? ctxBlock.trimStart() : '',
-      `🛒 [Ver oferta](${safeUrl})${categoryLine}`,
-    ].filter(Boolean).join('\n');
-  } else if (alertType === 'back_in_stock') {
-    const lines = [
-      `🟢 *PRODUTO DE VOLTA AO ESTOQUE — ${storeLabel}*`,
-      ``,
-      `📦 *${nameLabel}*`,
-      ``,
-      `💰 Preço agora: *${escapeMarkdown(formatPrice(currentPrice))}*`,
-    ];
-    if (ctxBlock.trim()) lines.push(ctxBlock.trimStart().trimEnd());
-    else if (lowestPrice) lines.push(`🏆 Mínimo histórico: ${escapeMarkdown(formatPrice(lowestPrice))}`);
-    lines.push(``, `🛒 [Ver oferta](${safeUrl})${categoryLine}`);
-    caption = lines.join('\n');
-  } else if (alertType === 'price_bug') {
-    caption = [
-      `🐛🐛🐛 *POSSÍVEL BUG DE PREÇO\\!* 🐛🐛🐛`,
-      ``,
-      `🚨 *${storeLabel}*`,
-      `📦 *${nameLabel}*`,
-      ``,
-      `💸 Preço agora: *${escapeMarkdown(formatPrice(currentPrice))}* _\\(\\-${pctLabel}%\\)_`,
-      `💰 Preço anterior: ~${escapeMarkdown(formatPrice(lastPrice))}~`,
-      ctxBlock.trim() ? ctxBlock.trimStart() : '',
-      `⚠️ _Pode ser erro do site\\. Se for real, esgota em minutos\\._`,
-      `⚡ *CONFIRME ANTES DE FECHAR — corre\\!*`,
-      ``,
-      `🛒 [VER OFERTA AGORA](${safeUrl})${categoryLine}`,
-    ].filter(Boolean).join('\n');
-  } else {
-    caption = [
-      `📉 *QUEDA BRUSCA DE PREÇO — ${storeLabel}*`,
-      ``,
-      `📦 *${nameLabel}*`,
-      ``,
-      `💰 Preço agora: *${escapeMarkdown(formatPrice(currentPrice))}* _\\(\\-${pctLabel}%\\)_`,
-      `⬇️ Preço anterior: ~${escapeMarkdown(formatPrice(lastPrice))}~`,
-      ctxBlock.trim() ? ctxBlock.trimStart() : '',
-      `🛒 [Ver oferta](${safeUrl})${categoryLine}`,
-    ].filter(Boolean).join('\n');
+  // Bloco de inteligência (score + raridade)
+  const intelLines = [];
+  if (typeof score === 'number' && score > 0) {
+    const stars = '⭐'.repeat(Math.max(1, Math.round(score / 2)));
+    intelLines.push(`${stars} *Avaliação: ${escapeMarkdown(score.toFixed(1))}/10* — ${escapeMarkdown(scoreLabel || '')}`);
   }
+  if (typeof rarityCount === 'number') {
+    const rarityIcon = rarityCount <= 1 ? '💎' : rarityCount <= 5 ? '🔥' : rarityCount <= 15 ? '🔁' : '📊';
+    intelLines.push(`${rarityIcon} Oferta *${escapeMarkdown(rarityLabel || '')}* \\(apareceu ${rarityCount}x em 90 dias\\)`);
+  }
+
+  // Monta o caption com linhas em branco entre seções pra respirar
+  const sections = [
+    header,
+    `📦 *${nameLabel}*`,
+    priceLines.join('\n'),
+  ];
+  if (ctxLines.length) sections.push(ctxLines.join('\n'));
+  if (intelLines.length) sections.push(intelLines.join('\n'));
+  if (alertType === 'price_bug') {
+    sections.push(
+      `⚠️ _Pode ser erro do site\\. Se for real, esgota em minutos\\._\n` +
+      `⚡ *CONFIRME ANTES DE FECHAR — corre\\!*`
+    );
+  }
+  const footerParts = [`🛒 [Ver oferta](${safeUrl})`];
+  if (categoryLine) footerParts.push(categoryLine);
+  sections.push(footerParts.join('\n'));
+
+  let caption = sections.join('\n\n');
 
   // Dica rotativa no final (engaja sem poluir muito)
   caption += `\n\n_${escapeMarkdown(nextTip())}_`;
@@ -389,7 +389,7 @@ async function sendShowcase({ productId, name, url, store, category, price, imag
     : '';
 
   const caption = [
-    `🛒 *ACHADINHO — ${storeLabel}*`,
+    `🛒 *VALE A PENA — ${storeLabel}*`,
     ``,
     `📦 *${nameLabel}*`,
     ``,
@@ -551,6 +551,47 @@ async function sendWeeklyTop(items) {
   }
 }
 
+// Recomendação personalizada — DM individual semanal pro user com top drops
+// das suas categorias favoritas.
+async function sendPersonalRecommendation(userId, items, categories) {
+  if (!items || !items.length) return false;
+  const catLabels = categories.map((c) => CATEGORY_LABELS[c] || c).join(', ');
+  const lines = [
+    `💡 *Recomendações pra você*`,
+    ``,
+    `_Achei ${items.length} oferta\\(s\\) da semana nas suas categorias_ \\(${escapeMarkdown(catLabels)}\\)\\:`,
+    ``,
+  ];
+  let i = 1;
+  for (const it of items) {
+    const url = withAffiliateTag(it.product.url);
+    const name = escapeMarkdown(it.product.name);
+    const store = escapeMarkdown((it.product.store || '').toUpperCase());
+    const safeUrl = escapeMdUrl(url);
+    const cur = escapeMarkdown(formatPrice(it.currentPrice));
+    const before = escapeMarkdown(formatPrice(it.weekStartPrice));
+    const pct = escapeMarkdown(it.dropPct.toFixed(0));
+    lines.push(`*${i}\\.* [${name}](${safeUrl})`);
+    lines.push(`   _${store}_ — *${cur}* \\(de ~${before}~, *\\-${pct}%*\\)`);
+    lines.push('');
+    i++;
+  }
+  lines.push(`💎 _Quer monitorar algum desses? Toque no link e use /addproduto no @${BOT_USERNAME}_`);
+
+  try {
+    await tgSend('sendMessage', userId, lines.join('\n'), {
+      parse_mode: 'MarkdownV2',
+      disable_web_page_preview: true,
+    });
+    console.log(`[Telegram] Recomendação enviada pra ${userId} (${items.length} itens)`);
+    return true;
+  } catch (err) {
+    const code = err?.response?.body?.error_code;
+    if (code !== 403) console.warn(`[Telegram] Recomendação ${userId} falhou:`, err.message);
+    return false;
+  }
+}
+
 async function sendAdminMessage(text, opts = {}) {
   if (!TELEGRAM_ADMIN_USER_ID) {
     console.warn('[Telegram] TELEGRAM_ADMIN_USER_ID não configurado — pulando notificação admin');
@@ -563,4 +604,4 @@ async function sendAdminMessage(text, opts = {}) {
   }
 }
 
-module.exports = { sendPriceAlert, sendAdminMessage, sendShowcase, sendCouponDeal, sendBackInStockDigest, sendWeeklyTop, buildShareMessage };
+module.exports = { sendPriceAlert, sendAdminMessage, sendShowcase, sendCouponDeal, sendBackInStockDigest, sendWeeklyTop, sendPersonalRecommendation, buildShareMessage };

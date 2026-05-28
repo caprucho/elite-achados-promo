@@ -1,5 +1,5 @@
 require('dotenv').config();
-const { getActiveProducts, savePrice, getLowestPriceRecent, getLastPrice, wasAlertRecentlySent, registerAlert, getPriceHistory, saveUnavailable, getConsecutiveUnavailableCount, getLastScanAt, getUnavailableStreakStart, wasUnavailableAlertSent, markUnavailableAlertSent, clearUnavailableAlertSent, isInAdaptiveCooldown, getPriceContext } = require('./db/queries');
+const { getActiveProducts, savePrice, getLowestPriceRecent, getLastPrice, wasAlertRecentlySent, registerAlert, getPriceHistory, saveUnavailable, getConsecutiveUnavailableCount, getLastScanAt, getUnavailableStreakStart, wasUnavailableAlertSent, markUnavailableAlertSent, clearUnavailableAlertSent, isInAdaptiveCooldown, getPriceContext, getOfferIntelligence } = require('./db/queries');
 const { getPrice }       = require('./scrapers');
 const { sendPriceAlert, sendAdminMessage } = require('./bot/telegram');
 const { notifyError, recordAlert, recordScan, recordProduct, scheduleDailySummary } = require('./utils/adminAlerts');
@@ -177,13 +177,15 @@ async function processProduct(product) {
     const alreadySent = await wasAlertRecentlySent(id, currentPrice);
     if (!alreadySent) {
       const dropPct = ((lastPrice - currentPrice) / lastPrice) * 100;
-      const ctx = await getPriceContext(id);
+      const intel = await getOfferIntelligence(id, currentPrice);
       console.log(`[Monitor] 🐛 Enviando alerta de BUG — ${name}: ${currentPrice}`);
       try {
         await sendPriceAlert({
           productId: id, name, url, store, category, isMasc, isFem,
           currentPrice, lastPrice, lowestPrice,
-          normalPrice: ctx.normalPrice, allTimeLow: ctx.allTimeLow,
+          normalPrice: intel.median30, allTimeLow: intel.allTimeLow,
+          score: intel.score, scoreLabel: intel.scoreLabel,
+          rarityCount: intel.rarityCount, rarityLabel: intel.rarityLabel,
           discountPct: dropPct,
           imageUrl, priceHistory,
           alertType: 'price_bug',
@@ -260,9 +262,16 @@ async function processProduct(product) {
         const discountPct = alertType === 'min_beat' ? discountFromMin
                           : alertType === 'drop'     ? dropFromLast
                           : 0;
-        const ctx = await getPriceContext(id);
+        const intel = await getOfferIntelligence(id, currentPrice);
         try {
-          await sendPriceAlert({ productId: id, name, url, store, category, isMasc, isFem, currentPrice, lastPrice, lowestPrice, normalPrice: ctx.normalPrice, allTimeLow: ctx.allTimeLow, discountPct, imageUrl, priceHistory, alertType });
+          await sendPriceAlert({
+            productId: id, name, url, store, category, isMasc, isFem,
+            currentPrice, lastPrice, lowestPrice,
+            normalPrice: intel.median30, allTimeLow: intel.allTimeLow,
+            score: intel.score, scoreLabel: intel.scoreLabel,
+            rarityCount: intel.rarityCount, rarityLabel: intel.rarityLabel,
+            discountPct, imageUrl, priceHistory, alertType,
+          });
           await registerAlert(id, currentPrice, discountPct);
           recordAlert(alertType);
         } catch (err) {
@@ -388,6 +397,15 @@ async function main() {
       require('./weeklyTop').scheduleWeeklyTop();
     } catch (err) {
       console.warn('[Monitor] TOP semanal não iniciado:', err.message);
+    }
+  }
+
+  // Agenda recomendações personalizadas (domingo 18h BRT — DM por user)
+  if (process.env.ENABLE_PERSONAL_REC !== 'false') {
+    try {
+      require('./personalRecommendations').schedulePersonalRecommendations();
+    } catch (err) {
+      console.warn('[Monitor] Recomendações personalizadas não iniciadas:', err.message);
     }
   }
 
