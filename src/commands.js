@@ -685,6 +685,31 @@ bot.onText(/^\/listarprodutos\b/, async (msg) => {
   if (block.trim()) await reply(msg, block);
 });
 
+// ── ADMIN: /test_ml_link ─────────────────────────────────────────────────────
+bot.onText(/^\/test_ml_link\s+(.+)$/, async (msg, match) => {
+  if (!isAdmin(msg)) return;
+  const rawUrl = match[1].trim();
+  await reply(msg, '⏳ Testando link ML...');
+  try {
+    const { getMLShortUrl } = require('../utils/mlShortUrl');
+    const shortUrl = await getMLShortUrl(rawUrl);
+    const lines = [
+      '✅ *Link testado:*',
+      '',
+      `📍 Original:`,
+      `\`${rawUrl}\``,
+      '',
+      `🔗 Short URL (com ref):`,
+      `\`${shortUrl}\``,
+      '',
+      shortUrl.includes('meli.la') ? '✅ API funcionando (meli.la)' : '⚠️ Fallback (API cair ou URL com ref)',
+    ];
+    await reply(msg, lines.join('\n'));
+  } catch (err) {
+    await reply(msg, `❌ Erro: ${err.message}`);
+  }
+});
+
 // ── ADMIN: /topsemana_debug ──────────────────────────────────────────────────
 bot.onText(/^\/topsemana_debug\b/, async (msg) => {
   if (!isAdmin(msg)) return;
