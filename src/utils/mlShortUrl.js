@@ -59,9 +59,15 @@ async function getMLShortUrl(fullUrl) {
     console.log(`[MLShortUrl] ${fullUrl.slice(0, 60)}... → ${shortUrl}`);
     return shortUrl;
   } catch (err) {
-    console.warn(`[MLShortUrl] Falha ao encurtar ${fullUrl.slice(0, 50)}:`, err.message);
-    // Fallback: retorna URL normal
-    return fullUrl;
+    console.warn(`[MLShortUrl] Falha ao encurtar, usando fallback com utm_source:`, err.message);
+    // Fallback: adiciona utm_source ao invés de chamar API
+    try {
+      const u = new URL(fullUrl);
+      u.searchParams.set('utm_source', process.env.ML_AFFILIATE_ID || 'EliteOfertas99');
+      return u.toString();
+    } catch {
+      return fullUrl; // URL inválida, retorna como está
+    }
   }
 }
 
