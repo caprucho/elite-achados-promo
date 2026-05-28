@@ -14,15 +14,21 @@ const BOT_USERNAME = (process.env.TELEGRAM_BOT_USERNAME || 'Elite_Achados_PromoB
 const ALERT_SEND_DELAY_MS  = parseInt(process.env.ALERT_SEND_DELAY_MS  || '1500', 10);
 const ALERT_MAX_RETRIES    = parseInt(process.env.ALERT_MAX_RETRIES    || '5', 10);
 const AMAZON_AFFILIATE_TAG = process.env.AMAZON_AFFILIATE_TAG || 'eliteofertas9-20';
+const ML_AFFILIATE_ID = process.env.ML_AFFILIATE_ID || 'EliteOfertas99';
 
 // Reescreve URL da Amazon com a tag de afiliado (Amazon Associates).
 // Toda compra a partir desse link gera comissão. Outras lojas: URL intacta.
 function withAffiliateTag(rawUrl) {
-  if (!AMAZON_AFFILIATE_TAG) return rawUrl;
   try {
     const u = new URL(rawUrl);
-    if (u.hostname.includes('amazon.com') || u.hostname === 'amzn.to') {
+    // Amazon — tag de afiliado
+    if ((u.hostname.includes('amazon.com') || u.hostname === 'amzn.to') && AMAZON_AFFILIATE_TAG) {
       u.searchParams.set('tag', AMAZON_AFFILIATE_TAG);
+      return u.toString();
+    }
+    // Mercado Livre — utm_source
+    if (u.hostname.includes('mercadolivre.com') && ML_AFFILIATE_ID) {
+      u.searchParams.set('utm_source', ML_AFFILIATE_ID);
       return u.toString();
     }
   } catch {}
