@@ -15,23 +15,38 @@ const ALERT_SEND_DELAY_MS  = parseInt(process.env.ALERT_SEND_DELAY_MS  || '1500'
 const ALERT_MAX_RETRIES    = parseInt(process.env.ALERT_MAX_RETRIES    || '5', 10);
 const AMAZON_AFFILIATE_TAG = process.env.AMAZON_AFFILIATE_TAG || 'eliteofertas9-20';
 const ML_AFFILIATE_ID = process.env.ML_AFFILIATE_ID || 'EliteOfertas99';
+const { getMLShortUrl } = require('../utils/mlShortUrl');
 
 // Reescreve URL da Amazon com a tag de afiliado (Amazon Associates).
 // Toda compra a partir desse link gera comissão. Outras lojas: URL intacta.
 function withAffiliateTag(rawUrl) {
+  // Amazon apenas (síncrono)
   try {
     const u = new URL(rawUrl);
-    // Amazon — tag de afiliado
     if ((u.hostname.includes('amazon.com') || u.hostname === 'amzn.to') && AMAZON_AFFILIATE_TAG) {
       u.searchParams.set('tag', AMAZON_AFFILIATE_TAG);
       return u.toString();
     }
-    // Mercado Livre — utm_source
-    if (u.hostname.includes('mercadolivre.com') && ML_AFFILIATE_ID) {
-      u.searchParams.set('utm_source', ML_AFFILIATE_ID);
+  } catch {}
+  return rawUrl;
+}
+
+// Versão async que cobre Amazon + Mercado Livre (short URL)
+async function withAffiliateLinksAsync(rawUrl) {
+  try {
+    const u = new URL(rawUrl);
+    // Amazon — tag de afiliado (síncrono)
+    if ((u.hostname.includes('amazon.com') || u.hostname === 'amzn.to') && AMAZON_AFFILIATE_TAG) {
+      u.searchParams.set('tag', AMAZON_AFFILIATE_TAG);
       return u.toString();
     }
-  } catch {}
+    // Mercado Livre — short URL via API
+    if (u.hostname.includes('mercadolivre.com')) {
+      return await getMLShortUrl(rawUrl);
+    }
+  } catch (err) {
+    console.warn('[Telegram] Erro ao processar link:', err.message);
+  }
   return rawUrl;
 }
 
@@ -227,7 +242,7 @@ async function postToDest({ threadId, caption, imageUrl, reply_markup, parse_mod
 }
 
 async function sendPriceAlert({ productId, name, url, store, category, currentPrice, lowestPrice, lastPrice, normalPrice, allTimeLow, score, scoreLabel, rarityCount, rarityLabel, discountPct, imageUrl, priceHistory = [], alertType = 'minimum', isMasc = false, isFem = false }) {
-  url = withAffiliateTag(url); // aplica tag de afiliado Amazon (no-op nas outras lojas)
+  url = await withAffiliateLinksAsync(url); // aplica tag Amazon + short URL ML
   const storeLabel    = escapeMarkdown(store.toUpperCase());
   const nameLabel     = escapeMarkdown(name);
   const pctLabel      = escapeMarkdown((discountPct || 0).toFixed(1));
@@ -386,7 +401,7 @@ async function sendPriceAlert({ productId, name, url, store, category, currentPr
 // Card de vitrine — indicação de produto (não é alerta de queda).
 // Usado pela rotação de produtos Amazon pra gerar tráfego de afiliado.
 async function sendShowcase({ productId, name, url, store, category, price, imageUrl }) {
-  url = withAffiliateTag(url);
+  url = await withAffiliateLinksAsync(url);
   const storeLabel = escapeMarkdown(store.toUpperCase());
   const nameLabel  = escapeMarkdown(name);
   const safeUrl    = escapeMdUrl(url);
@@ -466,7 +481,7 @@ async function sendBackInStockDigest(items) {
   const lines = [header, ''];
 
   for (const it of items) {
-    const url = withAffiliateTag(it.url);
+    const url = await withAffiliateLinksAsync(it.url);
     const nameLabel  = escapeMarkdown(it.name);
     const storeLabel = escapeMarkdown((it.store || '').toUpperCase());
     const priceLabel = escapeMarkdown(formatPrice(it.price));
@@ -510,7 +525,7 @@ async function sendWeeklyTop(items) {
 
   let i = 1;
   for (const it of items) {
-    const url      = withAffiliateTag(it.product.url);
+    const url      = await withAffiliateLinksAsync(it.product.url);
     const name     = escapeMarkdown(it.product.name);
     const store    = escapeMarkdown((it.product.store || '').toUpperCase());
     const safeUrl  = escapeMdUrl(url);
@@ -570,7 +585,7 @@ async function sendPersonalRecommendation(userId, items, categories) {
   ];
   let i = 1;
   for (const it of items) {
-    const url = withAffiliateTag(it.product.url);
+    const url = await withAffiliateLinksAsync(it.product.url);
     const name = escapeMarkdown(it.product.name);
     const store = escapeMarkdown((it.product.store || '').toUpperCase());
     const safeUrl = escapeMdUrl(url);
