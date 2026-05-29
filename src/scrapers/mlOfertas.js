@@ -143,10 +143,12 @@ function dedup(items) {
 // Busca ofertas da vitrine.
 //   minDiscount — filtra por %OFF mínimo (cards sem desconto conhecido passam)
 //   limit       — corta o resultado final
-async function scrapeOfertas({ minDiscount = 0, limit = 30 } = {}) {
+//   url         — vitrine alternativa (ex: container/deal específico). Default
+//                 é a vitrine geral /ofertas.
+async function scrapeOfertas({ minDiscount = 0, limit = 30, url = OFERTAS_URL } = {}) {
   let html;
   try {
-    const r = await axios.get(OFERTAS_URL, { timeout: 20000, headers: HEADERS, maxRedirects: 5 });
+    const r = await axios.get(url, { timeout: 20000, headers: HEADERS, maxRedirects: 5 });
     html = r.data;
   } catch (err) {
     const status = err.response?.status || err.message;
