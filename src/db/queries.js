@@ -115,6 +115,14 @@ async function getPriceContext(productId) {
 //                 + bônus por raridade.
 // Raridade: quantas leituras nos últimos 90d ficaram dentro de ±2% do preço
 // atual. Quanto menor a contagem, mais rara a oferta.
+//
+// IMPORTANTE: raridade e score-de-raridade só têm sentido com histórico
+// suficiente. Produto recém-cadastrado tem 0-2 leituras → dizer "apareceu 0x,
+// extremamente rara, 9.6/10 IMPERDÍVEL" é enganoso. Por isso, com menos de
+// RARITY_MIN_READINGS leituras 90d, NÃO calculamos raridade (rarityCount=null,
+// sem bônus de raridade no score) — o card omite a linha de raridade.
+const RARITY_MIN_READINGS = parseInt(process.env.RARITY_MIN_READINGS || '15', 10);
+
 async function getOfferIntelligence(productId, currentPrice) {
   const since90 = new Date(Date.now() - 90 * 24 * 3600 * 1000).toISOString();
   const since30 = new Date(Date.now() - 30 * 24 * 3600 * 1000).toISOString();
@@ -134,6 +142,9 @@ async function getOfferIntelligence(productId, currentPrice) {
   const prices30 = (recent30.data || []).map((r) => Number(r.price)).filter((p) => p > 0).sort((a, b) => a - b);
   const prices90 = (recent90.data || []).map((r) => Number(r.price)).filter((p) => p > 0);
 
+  // Confiança: precisa de histórico suficiente pra falar de raridade/mín.
+  const enoughHistory = prices90.length >= RARITY_MIN_READINGS;
+
   // Mediana 30d
   let median30 = null;
   if (prices30.length) {
@@ -141,31 +152,35 @@ async function getOfferIntelligence(productId, currentPrice) {
     median30 = prices30.length % 2 ? prices30[mid] : (prices30[mid - 1] + prices30[mid]) / 2;
   }
 
-  // Raridade: quantas leituras 90d ficaram em ±2% do preço atual
-  const tol = currentPrice * 0.02;
-  const rarityCount = prices90.filter((p) => Math.abs(p - currentPrice) <= tol).length;
-
-  let rarityLabel;
-  if (rarityCount <= 1) rarityLabel = 'extremamente rara';
-  else if (rarityCount <= 5) rarityLabel = 'rara';
-  else if (rarityCount <= 15) rarityLabel = 'ocasional';
-  else rarityLabel = 'frequente';
+  // Raridade — SÓ com histórico suficiente. Senão rarityCount=null (omitido).
+  let rarityCount = null;
+  let rarityLabel = null;
+  if (enoughHistory) {
+    const tol = currentPrice * 0.02;
+    rarityCount = prices90.filter((p) => Math.abs(p - currentPrice) <= tol).length;
+    if (rarityCount <= 1) rarityLabel = 'extremamente rara';
+    else if (rarityCount <= 5) rarityLabel = 'rara';
+    else if (rarityCount <= 15) rarityLabel = 'ocasional';
+    else rarityLabel = 'frequente';
+  }
 
   // Score 0-10:
   // - até 6 pontos: % abaixo da mediana 30d (0 a 30%+)
-  // - até 3 pontos: bônus se está em/abaixo do mínimo histórico
-  // - até 2 pontos: bônus por raridade
+  // - até 3 pontos: bônus se está em/abaixo do mínimo histórico (só c/ histórico)
+  // - até 2 pontos: bônus por raridade (só c/ histórico)
   let score = 0;
   if (median30 && median30 > currentPrice) {
     const offFromMedian = ((median30 - currentPrice) / median30) * 100;
     score += Math.min(6, offFromMedian / 5); // 30%+ off da mediana = 6 pts
   }
-  if (allTimeLow !== null) {
+  if (enoughHistory && allTimeLow !== null) {
     if (currentPrice <= allTimeLow * 1.005) score += 3; // está no mín histórico
     else if (currentPrice <= allTimeLow * 1.05) score += 1; // até 5% acima
   }
-  if (rarityCount <= 1) score += 2;
-  else if (rarityCount <= 5) score += 1;
+  if (enoughHistory) {
+    if (rarityCount <= 1) score += 2;
+    else if (rarityCount <= 5) score += 1;
+  }
   score = Math.min(10, Math.max(0, Math.round(score * 10) / 10));
 
   let scoreLabel;
@@ -175,7 +190,7 @@ async function getOfferIntelligence(productId, currentPrice) {
   else if (score >= 3) scoreLabel = 'ok';
   else scoreLabel = 'fraca';
 
-  return { score, scoreLabel, rarityCount, rarityLabel, median30, allTimeLow };
+  return { score, scoreLabel, rarityCount, rarityLabel, median30, allTimeLow, enoughHistory };
 }
 
 async function getLowestPriceRecent(productId, days = LOWEST_PRICE_WINDOW_DAYS) {
