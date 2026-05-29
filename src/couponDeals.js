@@ -35,36 +35,36 @@ function fmtExpiry(expiresAt) {
   return m && d ? `${d}/${m}` : null;
 }
 
-// Garante que o produto está cadastrado e tem preço. Retorna { id, price } ou null.
+// Garante que o produto está cadastrado e tem preço.
+// Lê o scraper SEMPRE (preço atualizado + imagem pro card — o card de cupom
+// precisa da foto). Retorna { id, price, imageUrl }.
 async function ensureProduct(p, category) {
-  let prod = await findActiveProductByUrl(p.url);
+  const prod = await findActiveProductByUrl(p.url);
   let id = prod?.id || null;
+  let created = false;
+
+  // Scraper: preço fresco + imagem. Best-effort (null se falhar).
+  const scraped = await getPrice(p.url).catch(() => null);
+  const imageUrl = scraped?.imageUrl || prod?.image_url || null;
 
   if (!id) {
-    // Lê preço antes de cadastrar (valida que a URL canônica funciona)
-    const scraped = await getPrice(p.url).catch(() => null);
-    const { id: newId, status } = await addProduct(p.name, p.url, 'mercadolivre', {
+    const { id: newId } = await addProduct(p.name, p.url, 'mercadolivre', {
       category,
       addedByUsername: 'cupom-manual',
     });
     id = newId;
-    if ((status === 'created' || status === 'reactivated') && scraped?.price > 0) {
-      await savePrice(id, scraped.price).catch(() => {});
-      return { id, price: scraped.price };
-    }
+    created = true;
   }
 
-  // Já existia (ou cadastrou sem preço): pega o último preço do banco; se não
-  // tiver, tenta o scraper na hora.
-  let price = await getLastPrice(id);
-  if (!price || price <= 0) {
-    const scraped = await getPrice(p.url).catch(() => null);
-    if (scraped?.price > 0) {
-      price = scraped.price;
-      await savePrice(id, price).catch(() => {});
-    }
+  // Preço: o do scraper agora; senão o último do banco
+  let price = scraped?.price > 0 ? scraped.price : null;
+  if (price) {
+    await savePrice(id, price).catch(() => {});
+  } else {
+    price = await getLastPrice(id);
   }
-  return price > 0 ? { id, price } : { id, price: null };
+
+  return { id, price: price > 0 ? price : null, imageUrl, created };
 }
 
 async function runCouponDeals({ force = false } = {}) {
@@ -80,11 +80,10 @@ async function runCouponDeals({ force = false } = {}) {
   for (const c of coupons) {
     for (const p of c.products) {
       try {
-        const before = await findActiveProductByUrl(p.url);
         const info = await ensureProduct(p, c.category);
-        if (!before && info?.id) registered++;
+        if (info?.created) registered++;
         if (info?.id && info.price > 0) {
-          items.push({ coupon: c, product: p, category: c.category, productId: info.id, price: info.price });
+          items.push({ coupon: c, product: p, category: c.category, productId: info.id, price: info.price, imageUrl: info.imageUrl });
         } else {
           console.warn(`[CouponDeals] sem preço pra ${p.name.slice(0, 40)} — não posta (segue monitorando)`);
         }
@@ -119,6 +118,7 @@ async function runCouponDeals({ force = false } = {}) {
           label: it.coupon.discountLabel || null,
           expiresLabel: fmtExpiry(it.coupon.expiresAt),
         },
+        imageUrl: it.imageUrl,
         isMasc: !gender.ambiguous && gender.masc,
         isFem: !gender.ambiguous && gender.fem,
       });

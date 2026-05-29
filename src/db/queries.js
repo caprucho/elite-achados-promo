@@ -692,7 +692,7 @@ async function getWatchedProducts(telegramId) {
 async function findActiveProductByUrl(url) {
   const { data, error } = await supabase
     .from('products')
-    .select('id, name, store, url')
+    .select('id, name, store, url, image_url')
     .eq('url', url)
     .eq('active', true)
     .maybeSingle();
