@@ -24,6 +24,10 @@ const { sendMlDeal } = require('./bot/telegram');
 
 const RUN_EVERY_HOURS   = parseFloat(process.env.COUPON_DEALS_EVERY_HOURS || '2'); // a cada 2h
 const MAX_POSTS_PER_RUN = parseInt(process.env.COUPON_DEALS_MAX_POSTS || '1', 10); // 1 por rodada
+// Anti-repost do cupom: janela CURTA (própria), pra cada produto poder
+// reaparecer ~1x ao dia enquanto o cupom é válido (cupom é o atrativo, não a
+// queda). NÃO usa o dedup global de 7d dos alertas de queda.
+const REPOST_HOURS      = parseFloat(process.env.COUPON_DEALS_REPOST_HOURS || '20'); // ~1x/dia
 
 // Cursor de rotação em memória (avança a cada produto postado). Reinicia em
 // deploy — tudo bem, no máximo repete um produto que já circulou.
@@ -104,7 +108,7 @@ async function runCouponDeals({ force = false } = {}) {
   for (let step = 0; step < n && posted < MAX_POSTS_PER_RUN; step++) {
     const it = items[(rotationCursor + step) % n];
     try {
-      if (!force && await wasAlertRecentlySent(it.productId, it.price)) continue;
+      if (!force && await wasAlertRecentlySent(it.productId, it.price, REPOST_HOURS)) continue;
 
       const gender = inferGender(it.product.name, 'mercadolivre', it.category);
       const ok = await sendMlDeal({
