@@ -685,6 +685,38 @@ bot.onText(/^\/listarprodutos\b/, async (msg) => {
   if (block.trim()) await reply(msg, block);
 });
 
+// ── ADMIN: /cupom [run] ──────────────────────────────────────────────────────
+// Cupons MANUAIS (src/manualCoupons.js). Sem arg: mostra os cupons configurados,
+// validade e se os produtos têm URL canônica. "run": cadastra + posta 1 no grupo.
+bot.onText(/^\/cupom(?:\s+(run))?\b/, async (msg, match) => {
+  if (!isAdmin(msg)) return;
+  const doRun = match[1] === 'run';
+  try {
+    if (doRun) {
+      await reply(msg, '⏳ Rodando cupons manuais (cadastra + posta)...');
+      const { runCouponDeals } = require('./couponDeals');
+      const r = await runCouponDeals({ force: false });
+      return reply(msg, `✅ *Rodada de cupons concluída*\n\n📥 Cadastrados: ${r.registered}\n📤 Postados: ${r.posted}\n🎯 Candidatos: ${r.candidates}`);
+    }
+    // Preview da config
+    const { getAllCoupons, isCouponValid, hasRealUrl } = require('./manualCoupons');
+    const coupons = getAllCoupons();
+    if (!coupons.length) return reply(msg, '⚠️ Nenhum cupom manual configurado em `src/manualCoupons.js`.');
+    const blocks = coupons.map((c) => {
+      const valid = isCouponValid(c) ? '✅ válido' : '⛔ vencido';
+      const prods = c.products.map((p) => `  ${hasRealUrl(p) ? '✅' : '⚠️ falta URL'} ${p.name.slice(0, 40)}`).join('\n');
+      return `🎟️ \`${c.code}\` — ${valid} (vence ${c.expiresAt})\n${prods}`;
+    });
+    const pend = coupons.some((c) => c.products.some((p) => !hasRealUrl(p)));
+    await reply(msg,
+      `📋 *Cupons manuais configurados:*\n\n${blocks.join('\n\n')}` +
+      (pend ? `\n\n⚠️ _Tem produto sem URL canônica — me manda a URL normal do ML (.../p/MLB...) que eu preencho._` : `\n\n_Pra cadastrar + postar 1: \`/cupom run\`_`)
+    );
+  } catch (err) {
+    await reply(msg, `❌ Erro: ${err.message}`);
+  }
+});
+
 // ── ADMIN: /ofertas_ml [run] ─────────────────────────────────────────────────
 // Sem arg: PREVIEW (raspa a vitrine e mostra o que faria, sem cadastrar/postar).
 // "run": executa de verdade (auto-cadastra + posta nas categorias-foco).
@@ -1258,6 +1290,7 @@ const ADMIN_COMMANDS = [
   { command: 'topsemana',         description: '[admin] Postar TOP da semana no canal agora' },
   { command: 'recomendar',        description: '[admin] Disparar recomendações personalizadas (DM)' },
   { command: 'ofertas_ml',        description: '[admin] Ofertas ML: preview / run' },
+  { command: 'cupom',             description: '[admin] Cupons manuais: ver / run' },
   { command: 'sugestoes',         description: '[admin] Ver sugestões pendentes' },
   { command: 'aprovarsugestao',   description: '[admin] Aprovar sugestão pelo ID' },
   { command: 'rejeitarsugestao',  description: '[admin] Rejeitar sugestão pelo ID' },

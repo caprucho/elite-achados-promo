@@ -419,6 +419,17 @@ async function main() {
     }
   }
 
+  // Rodízio de cupons manuais (src/manualCoupons.js). OFF por padrão — liga com
+  // ENABLE_COUPON_DEALS=true. Só posta cupons válidos; produtos seguem
+  // monitorados após o cupom vencer.
+  if (process.env.ENABLE_COUPON_DEALS === 'true') {
+    try {
+      require('./couponDeals').scheduleCouponDeals();
+    } catch (err) {
+      console.warn('[Monitor] Cupons manuais não iniciados:', err.message);
+    }
+  }
+
   await runScan();
 
   const schedule = () => setTimeout(async () => {

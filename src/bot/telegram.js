@@ -625,9 +625,11 @@ async function sendAdminMessage(text, opts = {}) {
   }
 }
 
-// ── Oferta automática do Mercado Livre (descoberta via vitrine) ──────────
+// ── Oferta do Mercado Livre (vitrine automática OU cupom manual) ──────────
 // Posta no tópico da categoria (via topicsForProduct). Cupom é best-effort:
-// só mostra a linha quando o scraper detectou (coupon = {type,value} | null).
+//   coupon = { type:'fixed'|'pct', value }      → cupom da vitrine (sem código)
+//          | { code, label, expiresLabel }       → cupom MANUAL (com código)
+//          | null
 async function sendMlDeal({ productId, name, url, category, price, originalPrice, discountPct, coupon, imageUrl, isMasc = false, isFem = false }) {
   url = await withAffiliateLinksAsync(url); // short URL ML com ref
   const fmt       = (p) => escapeMarkdown(formatPrice(p));
@@ -642,12 +644,23 @@ async function sendMlDeal({ productId, name, url, category, price, originalPrice
     ? `~${fmt(originalPrice)}~ → *${fmt(price)}*${offLabel}`
     : `💰 *${fmt(price)}*${offLabel}`;
 
+  const headerTitle = coupon && coupon.code
+    ? `🎟️ *CUPOM EXCLUSIVO — MERCADO LIVRE*`
+    : `🔥 *OFERTA — MERCADO LIVRE*`;
   const sections = [
-    `🔥 *OFERTA — MERCADO LIVRE*`,
+    headerTitle,
     `📦 *${nameLabel}*`,
     priceBlock,
   ];
-  if (coupon && coupon.value) {
+  if (coupon && coupon.code) {
+    // Cupom manual: mostra código copiável (`code`) + label/validade
+    const lines = [`🎟️ Cupom: \`${escapeMarkdown(coupon.code)}\``];
+    if (coupon.label) lines.push(`💸 ${escapeMarkdown(coupon.label)}`);
+    if (coupon.expiresLabel) lines.push(`⏳ _Válido até ${escapeMarkdown(coupon.expiresLabel)}_`);
+    lines.push(`_Aplique o cupom no checkout antes de fechar a compra\\._`);
+    sections.push(lines.join('\n'));
+  } else if (coupon && coupon.value) {
+    // Cupom da vitrine: só o valor/percentual
     const couponTxt = coupon.type === 'pct'
       ? `${escapeMarkdown(String(coupon.value))}\\% OFF`
       : fmt(coupon.value);
