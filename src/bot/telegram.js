@@ -625,4 +625,53 @@ async function sendAdminMessage(text, opts = {}) {
   }
 }
 
-module.exports = { sendPriceAlert, sendAdminMessage, sendShowcase, sendCouponDeal, sendBackInStockDigest, sendWeeklyTop, sendPersonalRecommendation, buildShareMessage };
+// ── Oferta automática do Mercado Livre (descoberta via vitrine) ──────────
+// Posta no tópico da categoria (via topicsForProduct). Cupom é best-effort:
+// só mostra a linha de cupom quando couponValue veio do scraper.
+async function sendMlDeal({ productId, name, url, category, price, originalPrice, discountPct, couponValue, imageUrl, isMasc = false, isFem = false }) {
+  url = await withAffiliateLinksAsync(url); // short URL ML com ref
+  const fmt       = (p) => escapeMarkdown(formatPrice(p));
+  const nameLabel = escapeMarkdown(name);
+  const safeUrl   = escapeMdUrl(url);
+  const catLine   = category && CATEGORY_LABELS[category]
+    ? `🗂️ _${escapeMarkdown(CATEGORY_LABELS[category])}_`
+    : '';
+
+  const offLabel = discountPct != null ? ` _\\(\\-${escapeMarkdown(String(discountPct))}%\\)_` : '';
+  const priceBlock = (originalPrice && originalPrice > price)
+    ? `~${fmt(originalPrice)}~ → *${fmt(price)}*${offLabel}`
+    : `💰 *${fmt(price)}*${offLabel}`;
+
+  const sections = [
+    `🔥 *OFERTA — MERCADO LIVRE*`,
+    `📦 *${nameLabel}*`,
+    priceBlock,
+  ];
+  if (couponValue) {
+    sections.push(`🎟️ *Cupom de ${fmt(couponValue)}* disponível na página do produto`);
+  }
+  const footer = [`🛒 [Ver no Mercado Livre](${safeUrl})`];
+  if (catLine) footer.push(catLine);
+  sections.push(footer.join('\n'));
+
+  let caption = sections.join('\n\n');
+  caption += `\n\n_${escapeMarkdown(nextTip())}_`;
+
+  const reply_markup = buildProductButtons({ productId, name, url, currentPrice: price, discountPct });
+
+  // Roteia pro tópico da categoria; sem tópico configurado → topo do grupo
+  const threads = new Set(topicsForProduct({ category, isMasc, isFem }));
+  if (threads.size === 0) threads.add(null);
+
+  let sent = false;
+  for (const threadId of threads) {
+    const ok = await postToDest({ threadId, caption, imageUrl, reply_markup });
+    if (ok) {
+      sent = true;
+      console.log(`[Telegram] Oferta ML enviada (thread ${threadId || 'main'}): ${name} — ${formatPrice(price)}`);
+    }
+  }
+  return sent;
+}
+
+module.exports = { sendPriceAlert, sendAdminMessage, sendShowcase, sendCouponDeal, sendBackInStockDigest, sendWeeklyTop, sendPersonalRecommendation, sendMlDeal, buildShareMessage };
