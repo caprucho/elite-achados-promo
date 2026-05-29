@@ -685,6 +685,50 @@ bot.onText(/^\/listarprodutos\b/, async (msg) => {
   if (block.trim()) await reply(msg, block);
 });
 
+// ── ADMIN: /ofertas_ml [run] ─────────────────────────────────────────────────
+// Sem arg: PREVIEW (raspa a vitrine e mostra o que faria, sem cadastrar/postar).
+// "run": executa de verdade (auto-cadastra + posta nas categorias-foco).
+bot.onText(/^\/ofertas_ml(?:\s+(run))?\b/, async (msg, match) => {
+  if (!isAdmin(msg)) return;
+  const doRun = match[1] === 'run';
+  await reply(msg, doRun ? '⏳ Rodando ofertas ML (cadastra + posta)...' : '⏳ Buscando ofertas ML (preview, não posta)...');
+  try {
+    if (doRun) {
+      const { runMlDeals } = require('./mlDeals');
+      const r = await runMlDeals({ force: false });
+      if (r.error) return reply(msg, `❌ Falha no scrape: ${r.error}`);
+      return reply(msg, `✅ *Rodada ML concluída*\n\n📥 Cadastrados: ${r.registered}\n📤 Postados: ${r.posted}\n🎯 Candidatas: ${r.candidates}`);
+    }
+    // Preview
+    const { scrapeOfertas } = require('./scrapers/mlOfertas');
+    const { inferCategory } = require('./utils/inferCategory');
+    const FOCUS = new Set(['eletronicos','casa','hardware','beleza','calcados','vestuario','smartphones','acessorios','audio','perfumaria']);
+    const { items, error, cardsFound, couponsFound } = await scrapeOfertas({ minDiscount: 0, limit: 60 });
+    if (error) return reply(msg, `❌ Falha no scrape: ${error}`);
+    if (!items.length) return reply(msg, `⚠️ 0 ofertas parseadas (${cardsFound} cards). ML pode ter mudado o HTML.`);
+    const top = items
+      .map((it) => ({ ...it, cat: inferCategory(it.name) }))
+      .filter((it) => it.discountPct != null && it.discountPct >= 40 && FOCUS.has(it.cat))
+      .sort((a, b) => b.discountPct - a.discountPct)
+      .slice(0, 12);
+    const cupTxt = (c) => c ? (c.type === 'pct' ? ` 🎟️${c.value}%` : ` 🎟️+${fmtPrice(c.value)}`) : '';
+    if (!top.length) {
+      return reply(msg, `🔎 *Preview ofertas ML*\n${items.length} ofertas, ${cardsFound} cards, ${couponsFound} c/ cupom.\n\n⚠️ Nenhuma ≥40% OFF nas categorias-foco agora — *não postaria nada* nesta rodada.`);
+    }
+    const lines = top.map((it) => {
+      const de = it.originalPrice ? `de ${fmtPrice(it.originalPrice)} ` : '';
+      return `*${it.discountPct}% OFF*${cupTxt(it.coupon)} — ${de}por *${fmtPrice(it.price)}*\n[${it.cat}] ${it.name.slice(0, 46)}`;
+    });
+    await reply(msg,
+      `🔎 *Preview ofertas ML* (${items.length} ofertas, ${couponsFound} c/ cupom)\n\n` +
+      lines.join('\n\n') +
+      `\n\n_Executar de verdade: \`/ofertas_ml run\`_`
+    );
+  } catch (err) {
+    await reply(msg, `❌ Erro: ${err.message}`);
+  }
+});
+
 // ── ADMIN: /test_ml_link ─────────────────────────────────────────────────────
 bot.onText(/^\/test_ml_link\s+(.+)$/, async (msg, match) => {
   if (!isAdmin(msg)) return;
@@ -1213,6 +1257,7 @@ const ADMIN_COMMANDS = [
   { command: 'postarcupons',      description: '[admin] Postar cupons KaBuM no canal agora' },
   { command: 'topsemana',         description: '[admin] Postar TOP da semana no canal agora' },
   { command: 'recomendar',        description: '[admin] Disparar recomendações personalizadas (DM)' },
+  { command: 'ofertas_ml',        description: '[admin] Ofertas ML: preview / run' },
   { command: 'sugestoes',         description: '[admin] Ver sugestões pendentes' },
   { command: 'aprovarsugestao',   description: '[admin] Aprovar sugestão pelo ID' },
   { command: 'rejeitarsugestao',  description: '[admin] Rejeitar sugestão pelo ID' },

@@ -627,8 +627,8 @@ async function sendAdminMessage(text, opts = {}) {
 
 // ── Oferta automática do Mercado Livre (descoberta via vitrine) ──────────
 // Posta no tópico da categoria (via topicsForProduct). Cupom é best-effort:
-// só mostra a linha de cupom quando couponValue veio do scraper.
-async function sendMlDeal({ productId, name, url, category, price, originalPrice, discountPct, couponValue, imageUrl, isMasc = false, isFem = false }) {
+// só mostra a linha quando o scraper detectou (coupon = {type,value} | null).
+async function sendMlDeal({ productId, name, url, category, price, originalPrice, discountPct, coupon, imageUrl, isMasc = false, isFem = false }) {
   url = await withAffiliateLinksAsync(url); // short URL ML com ref
   const fmt       = (p) => escapeMarkdown(formatPrice(p));
   const nameLabel = escapeMarkdown(name);
@@ -647,8 +647,11 @@ async function sendMlDeal({ productId, name, url, category, price, originalPrice
     `📦 *${nameLabel}*`,
     priceBlock,
   ];
-  if (couponValue) {
-    sections.push(`🎟️ *Cupom de ${fmt(couponValue)}* disponível na página do produto`);
+  if (coupon && coupon.value) {
+    const couponTxt = coupon.type === 'pct'
+      ? `${escapeMarkdown(String(coupon.value))}\\% OFF`
+      : fmt(coupon.value);
+    sections.push(`🎟️ *Cupom de ${couponTxt}* na página do produto \\(aplique no checkout\\)`);
   }
   const footer = [`🛒 [Ver no Mercado Livre](${safeUrl})`];
   if (catLine) footer.push(catLine);

@@ -409,6 +409,16 @@ async function main() {
     }
   }
 
+  // Ofertas ML automáticas (descoberta via vitrine). OFF por padrão — liga com
+  // ENABLE_ML_DEALS=true depois de validar via /ofertas_ml run no privado.
+  if (process.env.ENABLE_ML_DEALS === 'true') {
+    try {
+      require('./mlDeals').scheduleMlDeals();
+    } catch (err) {
+      console.warn('[Monitor] Ofertas ML não iniciadas:', err.message);
+    }
+  }
+
   await runScan();
 
   const schedule = () => setTimeout(async () => {

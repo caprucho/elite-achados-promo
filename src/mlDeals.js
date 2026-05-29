@@ -24,7 +24,7 @@ const { sendMlDeal } = require('./bot/telegram');
 
 const RUN_EVERY_HOURS    = parseFloat(process.env.ML_DEALS_EVERY_HOURS    || '2');   // roda a cada 2h
 const MIN_POST_DISCOUNT  = parseInt(process.env.ML_DEALS_MIN_POST_OFF     || '40', 10); // só posta ≥40% OFF
-const MAX_POSTS_PER_RUN  = parseInt(process.env.ML_DEALS_MAX_POSTS        || '2', 10);  // 2 por rodada
+const MAX_POSTS_PER_RUN  = parseInt(process.env.ML_DEALS_MAX_POSTS        || '1', 10);  // 1 por rodada (conservador)
 const MIN_PRICE          = parseFloat(process.env.ML_DEALS_MIN_PRICE      || '30');  // < R$30 = provável tranqueira
 const MAX_PRICE          = parseFloat(process.env.ML_DEALS_MAX_PRICE      || '15000'); // teto de sanidade
 const SCRAPE_LIMIT       = parseInt(process.env.ML_DEALS_SCRAPE_LIMIT     || '60', 10);
@@ -49,35 +49,42 @@ async function runMlDeals({ force = false } = {}) {
     console.warn('[MLDeals] scrape falhou:', error);
     return { registered: 0, posted: 0, error };
   }
-  console.log(`[MLDeals] ${cardsFound} cards, ${items.length} ofertas, ${couponsFound} cupons no mapa`);
+  console.log(`[MLDeals] ${cardsFound} cards, ${items.length} ofertas, ${couponsFound} com cupom`);
 
-  // 1) AUTO-CADASTRO de todas as válidas (categoria inferida)
+  // 1) AUTO-CADASTRO de todas as válidas (categoria inferida).
+  // Guarda o productId de cada uma (recém-criada OU já existente) pra reusar no
+  // post, evitando um 2º lookup.
   let registered = 0;
   const enriched = [];
   for (const it of items) {
     if (isJunk(it)) continue;
     const category = inferCategory(it.name);
-    enriched.push({ ...it, category });
+    let productId = null;
     try {
       const existing = await findActiveProductByUrl(it.url);
-      if (existing) continue; // já cadastrado → não duplica
-      const { id, status } = await addProduct(it.name, it.url, 'mercadolivre', {
-        category: category === 'geral' ? null : category,
-        addedByUsername: 'auto-ofertas-ml',
-      });
-      if (status === 'created' || status === 'reactivated') {
-        registered++;
-        await savePrice(id, it.price).catch(() => {});
+      if (existing) {
+        productId = existing.id; // já cadastrado → reusa, não duplica
+      } else {
+        const { id, status } = await addProduct(it.name, it.url, 'mercadolivre', {
+          category: category === 'geral' ? null : category,
+          addedByUsername: 'auto-ofertas-ml',
+        });
+        productId = id;
+        if (status === 'created' || status === 'reactivated') {
+          registered++;
+          await savePrice(id, it.price).catch(() => {});
+        }
       }
     } catch (err) {
       console.warn('[MLDeals] cadastro falhou:', err.message);
     }
+    enriched.push({ ...it, category, productId });
   }
 
   // 2) POST — candidatas ≥ MIN_POST_DISCOUNT, SÓ categorias-foco, maiores %OFF.
   // Se não houver candidata, não posta (não enche tabela).
   const candidates = enriched
-    .filter((it) => it.discountPct != null && it.discountPct >= MIN_POST_DISCOUNT)
+    .filter((it) => it.productId && it.discountPct != null && it.discountPct >= MIN_POST_DISCOUNT)
     .filter((it) => FOCUS_CATEGORIES.has(it.category))
     .sort((a, b) => b.discountPct - a.discountPct);
 
@@ -85,29 +92,28 @@ async function runMlDeals({ force = false } = {}) {
   for (const it of candidates) {
     if (posted >= MAX_POSTS_PER_RUN) break;
     try {
-      const prod = await findActiveProductByUrl(it.url);
-      if (!prod) continue;
       // Anti-repost: já postou esse produto nesse preço recentemente? pula
-      if (!force && await wasAlertRecentlySent(prod.id, it.price)) continue;
+      if (!force && await wasAlertRecentlySent(it.productId, it.price)) continue;
 
       const gender = inferGender(it.name, 'mercadolivre', it.category);
       const ok = await sendMlDeal({
-        productId: prod.id,
+        productId: it.productId,
         name: it.name,
         url: it.url,
         category: it.category,
         price: it.price,
         originalPrice: it.originalPrice,
         discountPct: it.discountPct,
-        couponValue: it.couponValue,
+        coupon: it.coupon,
         imageUrl: it.imageUrl,
         isMasc: !gender.ambiguous && gender.masc,
         isFem: !gender.ambiguous && gender.fem,
       });
       if (ok) {
         posted++;
-        await registerAlert(prod.id, it.price, it.discountPct).catch(() => {});
-        console.log(`[MLDeals] POSTADO: ${it.name.slice(0, 45)} (${it.discountPct}% OFF, ${it.category}${it.couponValue ? ', cupom R$' + it.couponValue : ''})`);
+        await registerAlert(it.productId, it.price, it.discountPct).catch(() => {});
+        const cupTxt = it.coupon ? `, cupom ${it.coupon.type === 'pct' ? it.coupon.value + '%' : 'R$' + it.coupon.value}` : '';
+        console.log(`[MLDeals] POSTADO: ${it.name.slice(0, 45)} (${it.discountPct}% OFF, ${it.category}${cupTxt})`);
       }
     } catch (err) {
       console.warn('[MLDeals] post falhou:', err.message);

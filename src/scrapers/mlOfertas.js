@@ -13,16 +13,17 @@
 // Os preços vêm em aria-label legível ("44 reais com 90 centavos") — mais
 // robusto que os spans fragmentados.
 //
-// CUPOM (best-effort): o cupom NÃO fica dentro do card; vive num JSON de
-// metadados de "deals" no topo do HTML, keyado pelo deal id (ex: MLB779362-1).
-// O href de cada card carrega esse mesmo deal id (deal%3AMLB779362-1), então dá
-// pra cruzar os dois. ~19% dos cards têm cupom detectável. Quando não casa,
-// segue sem cupom. Essa parte é a mais frágil (some se o ML mudar o JSON).
+// CUPOM (best-effort): vem renderizado DENTRO do card, num bloco
+// poly-component__coupons → poly-coupons__pill. Pode ser fixo ("Cupom" +
+// aria-label="30 reais") ou percentual ("Cupom 15% OFF"). ~48% dos cards têm.
+// Quando não há, segue sem cupom. É a parte mais frágil (some se o ML mudar
+// a marcação do pill).
 //
 // Frágil por natureza (ML pode mudar HTML / dar anti-bot). Nunca quebra:
 // devolve { items, error }, items pode vir vazio.
 //
-// Retorna items: [{ url, name, price, originalPrice, discountPct, couponValue, imageUrl }]
+// Retorna items: [{ url, name, price, originalPrice, discountPct, coupon, imageUrl }]
+//   coupon: { type:'fixed', value:30 } | { type:'pct', value:15 } | null
 const axios = require('axios');
 
 const OFERTAS_URL = 'https://www.mercadolivre.com.br/ofertas';
@@ -44,12 +45,6 @@ function parseAriaPrice(label) {
   return parseFloat(`${reais}.${cents.padStart(2, '0')}`);
 }
 
-// Extrai o deal id do href: ...pdp_filters=deal%3AMLB779362-1... ou deal:MLB779362-1
-function extractDealId(href) {
-  const m = String(href).match(/deal(?:%3A|:)(MLB\d+-\d+)/i);
-  return m ? m[1] : null;
-}
-
 // Limpa URL: mantém só o link canônico do produto (tira query/tracking/hash)
 function cleanProductUrl(href) {
   try {
@@ -62,22 +57,28 @@ function cleanProductUrl(href) {
   }
 }
 
-// Constrói mapa dealId -> valor do cupom (R$) a partir do JSON de metadados.
-// Cada unidade de promoção tem o deal id seguido, em algumas centenas de chars,
-// de um objeto {"type":"coupon"...,"value":N}. Capturamos o id mais PRÓXIMO
-// que precede cada cupom (lazy) pra não casar um cupom com ids distantes.
-function buildCouponMap(html) {
-  const map = {};
-  // Limita ao começo do doc (onde fica o JSON de deals) pra não varrer 600KB
-  const head = html.slice(0, 120000);
-  const re = /(MLB\d+-\d+)(?:(?!MLB\d+-\d+)[\s\S]){0,500}?"type":"coupon"[\s\S]{0,250}?"value":(\d+)/g;
-  let m;
-  while ((m = re.exec(head)) !== null) {
-    const dealId = m[1];
-    const value = parseInt(m[2], 10);
-    if (value > 0 && !map[dealId]) map[dealId] = value;
+// Extrai o cupom de DENTRO do card. O ML renderiza o cupom no próprio card:
+//   <div class="poly-component__coupons"> ... poly-coupons__pill> Cupom
+//     <span aria-label="30 reais">...</span>      → cupom de R$ fixo
+//   ou "Cupom 15% OFF"                            → cupom percentual
+// Retorna { type:'fixed', value:30 } | { type:'pct', value:15 } | null.
+function extractCoupon(block) {
+  const idx = block.search(/poly-component__coupons|poly-coupons__/i);
+  if (idx < 0) return null;
+  // Janela curta a partir do bloco de cupons (evita pegar preço de outro lugar)
+  const zone = block.slice(idx, idx + 500);
+
+  // Percentual: "Cupom 15% OFF" / "Cupom de 15%"
+  const pct = zone.match(/Cupom[^<]{0,12}?(\d{1,2})\s*%/i);
+  if (pct) return { type: 'pct', value: parseInt(pct[1], 10) };
+
+  // Fixo: "Cupom" seguido de aria-label="30 reais" (com ou sem centavos)
+  const fixed = zone.match(/aria-label="([\d.]+\s*reais(?:\s*com\s*\d+\s*centavos)?)"/i);
+  if (fixed) {
+    const v = parseAriaPrice(fixed[1]);
+    if (!isNaN(v) && v > 0) return { type: 'fixed', value: v };
   }
-  return map;
+  return null;
 }
 
 // Quebra o HTML em blocos de poly-card.
@@ -89,7 +90,7 @@ function splitCards(html) {
   return cards;
 }
 
-function parseCard(block, couponMap) {
+function parseCard(block) {
   // Link + nome: <a ... class="poly-component__title" href="...">Nome</a>
   const linkMatch = block.match(/<a[^>]+class="[^"]*poly-component__title[^"]*"[^>]*href="([^"]+)"[^>]*>([\s\S]*?)<\/a>/i)
                  || block.match(/href="([^"]+)"[^>]*class="[^"]*poly-component__title[^"]*"[^>]*>([\s\S]*?)<\/a>/i);
@@ -119,14 +120,13 @@ function parseCard(block, couponMap) {
   if (offMatch) discountPct = parseInt(offMatch[1], 10);
   else if (originalPrice) discountPct = Math.round((1 - price / originalPrice) * 100);
 
-  // Cupom (best-effort): cruza deal id do href com o mapa de cupons
-  const dealId = extractDealId(rawHref);
-  const couponValue = (dealId && couponMap[dealId]) || null;
+  // Cupom (best-effort): lê de dentro do próprio card
+  const coupon = extractCoupon(block);
 
   const imageUrl = block.match(/class="poly-component__picture"[^>]+src="(https:\/\/http2\.mlstatic\.com[^"]+)"/i)?.[1]
                 || block.match(/<img[^>]+src="(https:\/\/http2\.mlstatic\.com[^"]+)"/i)?.[1] || null;
 
-  return { url, name, price, originalPrice, discountPct, couponValue, imageUrl };
+  return { url, name, price, originalPrice, discountPct, coupon, imageUrl };
 }
 
 function dedup(items) {
@@ -158,19 +158,19 @@ async function scrapeOfertas({ minDiscount = 0, limit = 30 } = {}) {
     return { items: [], error: 'HTML vazio/curto (provável bloqueio)' };
   }
 
-  const couponMap = buildCouponMap(html);
   const cards = splitCards(html);
-  let items = dedup(cards.map((c) => parseCard(c, couponMap)).filter(Boolean));
+  let items = dedup(cards.map(parseCard).filter(Boolean));
 
   if (minDiscount > 0) {
     items = items.filter((it) => it.discountPct == null || it.discountPct >= minDiscount);
   }
 
+  const couponsFound = items.filter((it) => it.coupon).length;
   return {
     items: items.slice(0, limit),
     error: null,
     cardsFound: cards.length,
-    couponsFound: Object.keys(couponMap).length,
+    couponsFound,
   };
 }
 
