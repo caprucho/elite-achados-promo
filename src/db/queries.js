@@ -237,9 +237,13 @@ async function wasAlertRecentlySent(productId, price, windowHours = ALERT_DEDUP_
 }
 
 async function registerAlert(productId, price, discountPct) {
+  // discount_pct é NOT NULL no banco. Alertas sem % de queda (ex: cupom manual,
+  // back_in_stock) passam null/undefined — normaliza pra 0 pra não estourar a
+  // constraint (o que faria o anti-repost NÃO gravar → flood do mesmo item).
+  const pct = (discountPct == null || isNaN(discountPct)) ? 0 : discountPct;
   const { error } = await supabase
     .from('alerts_sent')
-    .insert({ product_id: productId, price, discount_pct: discountPct });
+    .insert({ product_id: productId, price, discount_pct: pct });
 
   if (error) {
     console.error(`[registerAlert] Erro ao registrar alerta para produto ${productId}:`, error.message);
