@@ -621,6 +621,18 @@ async function sendAdminMessage(text, opts = {}) {
   try {
     await tgSend('sendMessage', TELEGRAM_ADMIN_USER_ID, text, { parse_mode: 'Markdown', disable_web_page_preview: true, ...opts });
   } catch (err) {
+    // Markdown quebrado (nome/URL de produto com _ * [ etc) → 400 can't parse
+    // entities. Em vez de perder a notificação, reenvia como TEXTO PURO.
+    const isParseErr = /can't parse entities|parse entities|Bad Request/i.test(err.message || '');
+    if (isParseErr) {
+      try {
+        await tgSend('sendMessage', TELEGRAM_ADMIN_USER_ID, text, { disable_web_page_preview: true });
+        return;
+      } catch (err2) {
+        console.error('[Telegram] Erro ao notificar admin (fallback texto):', err2.message);
+        return;
+      }
+    }
     console.error('[Telegram] Erro ao notificar admin:', err.message);
   }
 }

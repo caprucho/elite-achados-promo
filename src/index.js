@@ -80,12 +80,16 @@ async function maybeNotifyLongUnavailable(product) {
   if (days < UNAVAILABLE_NOTIFY_DAYS) return;
   if (await wasUnavailableAlertSent(id)) return;
 
+  // Escapa caracteres que o Markdown legacy do Telegram interpreta (_ * [ `).
+  // Nome/URL de produtos do ML costumam ter '_' e '*' que quebram o parse e
+  // fazem a notificação falhar (ETELEGRAM 400: can't parse entities).
+  const mdEsc = (s) => String(s).replace(/[_*[\]`]/g, '\\$&');
   await sendAdminMessage([
     `⚠️ *Produto indisponível há ${Math.floor(days)} dias*`,
     ``,
-    `📦 *${name}*`,
-    `🏪 ${store}`,
-    `🔗 ${url}`,
+    `📦 *${mdEsc(name)}*`,
+    `🏪 ${mdEsc(store)}`,
+    `🔗 ${mdEsc(url)}`,
     ``,
     `Verifique se o link quebrou ou o produto foi removido.`,
     `Pra desativar: \`/removerproduto ${id}\``,
