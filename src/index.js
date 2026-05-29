@@ -373,8 +373,11 @@ async function main() {
     catch (err) { console.warn('[Monitor] Digest back_in_stock não iniciado:', err.message); }
   }
 
-  // Agenda a vitrine rotativa (achadinhos Amazon — gera tráfego de afiliado)
-  if (process.env.ENABLE_SHOWCASE !== 'false') {
+  // Vitrine rotativa (antigo "achadinhos"/"Em Destaque") DESLIGADA por decisão
+  // do dono (2026-05-29): postava itens da lista em rodízio mesmo sem desconto.
+  // A partir de agora SÓ se posta queda real detectada pelo monitor (runScan →
+  // sendPriceAlert). Pra religar a vitrine um dia: ENABLE_SHOWCASE=true.
+  if (process.env.ENABLE_SHOWCASE === 'true') {
     try {
       require('./showcase').scheduleShowcase();
     } catch (err) {
