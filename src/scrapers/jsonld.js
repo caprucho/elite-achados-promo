@@ -43,20 +43,39 @@ function collectProducts(html) {
   return found;
 }
 
-function isOutOfStock(prod) {
-  const offers = Array.isArray(prod.offers) ? prod.offers[0] : prod.offers;
-  const avail = String(offers?.availability || '').toLowerCase();
-  return avail.includes('outofstock') || avail.includes('discontinued');
+function offerAvailable(o) {
+  // Sem availability declarada → assume disponível (muitas lojas omitem).
+  const avail = String(o?.availability || '').toLowerCase();
+  if (!avail) return true;
+  return !(avail.includes('outofstock') || avail.includes('soldout') || avail.includes('discontinued'));
+}
+
+// Fora de estoque SÓ se TODAS as ofertas de TODOS os Products estiverem
+// esgotadas. Um produto com variantes (ex: Keychron: switch X esgotado, switch
+// Y disponível) NÃO deve ser tratado como indisponível só porque a 1ª variante
+// listada está sem estoque.
+function allOutOfStock(products) {
+  let sawAnyOffer = false;
+  for (const prod of products) {
+    const offersArr = Array.isArray(prod.offers) ? prod.offers : [prod.offers];
+    for (const o of offersArr) {
+      if (!o) continue;
+      sawAnyOffer = true;
+      if (offerAvailable(o)) return false; // achou uma comprável → disponível
+    }
+  }
+  return sawAnyOffer; // só "fora de estoque" se vimos ofertas e nenhuma disponível
 }
 
 function extractPriceFromProduct(prod) {
-  // Página pode ter múltiplas ofertas pro mesmo produto (ex: Apple AirTag tem
-  // "Pacote com 1" R$369 e "Pacote com 4" R$1249). Pegamos sempre o MENOR —
-  // é o preço de entrada ("a partir de"), e garante consistência entre scans.
+  // Página pode ter múltiplas ofertas pro mesmo produto (variantes, pacotes).
+  // Pegamos o MENOR preço ENTRE AS DISPONÍVEIS — é o preço de entrada que dá
+  // pra comprar de fato. Ignora variantes esgotadas (não adianta postar preço
+  // de algo que não está à venda).
   const offersArr = Array.isArray(prod.offers) ? prod.offers : [prod.offers];
   const prices = [];
   for (const o of offersArr) {
-    if (!o) continue;
+    if (!o || !offerAvailable(o)) continue;
     const raw = o.price ?? o.lowPrice ?? o.highPrice;
     if (raw === undefined || raw === null) continue;
     const p = parseFloat(String(raw).replace(',', '.'));
@@ -124,9 +143,10 @@ async function scrape(url) {
 
   const products = collectProducts(html);
 
-  // Se algum Product está marcado como out of stock, considera indisponível
-  if (products.some(isOutOfStock)) {
-    console.log('[jsonld] Produto fora de estoque:', url);
+  // Indisponível só se TODAS as ofertas estiverem esgotadas (variante esgotada
+  // não derruba o produto se há outra disponível).
+  if (allOutOfStock(products)) {
+    console.log('[jsonld] Produto fora de estoque (todas as variantes):', url);
     return null;
   }
 
