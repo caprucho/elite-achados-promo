@@ -23,12 +23,12 @@ const COUPONS = [
     discountLabel: '',                // opcional — preencha se quiser (ex: 'R$ 30 OFF')
     category: 'perfumaria',
     products: [
-      // Sauvage Dior Parfum 100ml — meli.la/1hghsXC
-      { name: 'Sauvage Dior Parfum - Perfume Masculino 100ml', url: 'COLE_A_URL_CANONICA_AQUI' },
-      // Bvlgari Man Rain Essence EDP 100ml — meli.la/2q66hjH
-      { name: 'Bvlgari Man Rain Essence Masculino Eau de Parfum 100ml', url: 'COLE_A_URL_CANONICA_AQUI' },
-      // Dolce & Gabbana Q EDP 100ml — meli.la/2zvZ7nn
-      { name: 'Dolce & Gabbana Q by Dolce & Gabbana EDP 100ml', url: 'COLE_A_URL_CANONICA_AQUI' },
+      // meli.la/1hghsXC — R$ ~748
+      { name: 'Sauvage Dior Parfum - Perfume Masculino 100ml', url: 'https://www.mercadolivre.com.br/sauvage-dior-parfum-perfume-masculino-100ml/p/MLB17451754' },
+      // meli.la/2q66hjH — R$ ~629
+      { name: 'Bvlgari Man Rain Essence Masculino Eau de Parfum 100ml', url: 'https://www.mercadolivre.com.br/bvlgari-man-rain-essence-masculino-eau-de-parfum-100ml/p/MLB23908421' },
+      // meli.la/2zvZ7nn — R$ ~570
+      { name: 'Dolce & Gabbana Q EDP Floral Feminino 100ml', url: 'https://www.mercadolivre.com.br/perfume-dolcegabbana-q-edp-floral-feminino-100ml-travel-size/p/MLB41550652' },
     ],
   },
 ];
