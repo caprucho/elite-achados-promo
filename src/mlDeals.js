@@ -22,9 +22,9 @@ const {
 } = require('./db/queries');
 const { sendMlDeal } = require('./bot/telegram');
 
-const RUN_EVERY_HOURS    = parseFloat(process.env.ML_DEALS_EVERY_HOURS    || '2');   // roda a cada 2h
-const MIN_POST_DISCOUNT  = parseInt(process.env.ML_DEALS_MIN_POST_OFF     || '40', 10); // só posta ≥40% OFF
-const MAX_POSTS_PER_RUN  = parseInt(process.env.ML_DEALS_MAX_POSTS        || '1', 10);  // 1 por rodada (conservador)
+const RUN_EVERY_HOURS    = parseFloat(process.env.ML_DEALS_EVERY_HOURS    || '1');   // roda a cada 1h
+const MIN_POST_DISCOUNT  = parseInt(process.env.ML_DEALS_MIN_POST_OFF     || '30', 10); // só posta ≥30% OFF
+const MAX_POSTS_PER_RUN  = parseInt(process.env.ML_DEALS_MAX_POSTS        || '2', 10);  // 2 por rodada
 const MIN_PRICE          = parseFloat(process.env.ML_DEALS_MIN_PRICE      || '30');  // < R$30 = provável tranqueira
 const MAX_PRICE          = parseFloat(process.env.ML_DEALS_MAX_PRICE      || '15000'); // teto de sanidade
 const SCRAPE_LIMIT       = parseInt(process.env.ML_DEALS_SCRAPE_LIMIT     || '60', 10);

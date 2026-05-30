@@ -2,9 +2,10 @@ const { supabase } = require('./supabase');
 const { inferGender } = require('../utils/inferGender');
 
 // Dedup de alertas: não re-alertar o mesmo produto num preço ~igual dentro
-// da janela. Janela longa (7 dias) + tolerância (2%) mata o flood de produto
-// parado em promoção e de oscilação de centavos.
-const ALERT_DEDUP_HOURS         = parseInt(process.env.ALERT_DEDUP_HOURS || '168', 10);
+// da janela. Janela de 3 dias + tolerância (2%) evita repetição chata mas
+// deixa bons produtos reaparecerem mais (flexibilização pedida 2026-05-29;
+// era 168h/7d).
+const ALERT_DEDUP_HOURS         = parseInt(process.env.ALERT_DEDUP_HOURS || '72', 10);
 const ALERT_DEDUP_TOLERANCE_PCT = parseFloat(process.env.ALERT_DEDUP_TOLERANCE_PCT || '2');
 
 // Cooldown adaptativo: produto que disparou MUITO alerta em 7d entra em mute.
