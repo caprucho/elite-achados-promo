@@ -35,8 +35,8 @@ process.on('uncaughtException', (err) => {
   setTimeout(() => process.exit(1), 2000);
 });
 
-const DROP_THRESHOLD            = parseFloat(process.env.DROP_THRESHOLD_PCT      || '20'); // queda vs último preço
-const MIN_BEAT_THRESHOLD        = parseFloat(process.env.MIN_BEAT_THRESHOLD_PCT  || '5');  // % abaixo do mínimo histórico
+const DROP_THRESHOLD            = parseFloat(process.env.DROP_THRESHOLD_PCT      || '10'); // queda vs último preço (era 20 — flexibilizado 2026-05-29)
+const MIN_BEAT_THRESHOLD        = parseFloat(process.env.MIN_BEAT_THRESHOLD_PCT  || '4');  // % abaixo do mínimo histórico
 const MIN_CHANGES_FOR_HISTORIC  = parseInt(process.env.MIN_CHANGES_FOR_HISTORIC  || '5', 10); // mín. alterações de preço pra disparar min_beat/min_hit
 const UNAVAILABLE_THRESHOLD     = parseInt(process.env.UNAVAILABLE_THRESHOLD     || '3', 10); // scans consecutivos sem resposta
 const UNAVAILABLE_BACKOFF_HOURS = parseFloat(process.env.UNAVAILABLE_BACKOFF_HOURS || '8');  // espera N horas entre scans de produto indisponível
