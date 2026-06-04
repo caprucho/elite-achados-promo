@@ -21,10 +21,16 @@
 // Ordem importa: regra mais específica primeiro. Primeiro match vence.
 const RULES = [
   // perfumaria (antes de beleza — perfume é subcaso mais específico)
-  ['perfumaria', ['perfume', 'eau de parfum', 'eau de toilette', ' edt ', ' edp ', 'colônia', 'colonia', 'body spray', 'body mist', 'deo colônia', 'deo colonia']],
+  ['perfumaria', ['perfume', 'eau de parfum', 'eau de toilette', 'eau de cologne', 'eau forte', ' edt ', ' edp ', 'colônia', 'colonia', 'body spray', 'body mist', 'deo colônia', 'deo colonia', 'parfum', 'coffret', 'fragrância', 'fragrancia',
+    // linhas/marcas de perfume famosas (pegam nomes sem a palavra "perfume")
+    'la vie est belle', 'sol de janeiro', 'sauvage', 'good girl', 'bad boy', '212 vip', 'le male', '1 million', 'club de nuit', 'acqua di gio', 'la nuit', 'invictus', 'phantom']],
 
   // áudio
-  ['audio', ['fone de ouvido', 'fone bluetooth', 'fone sem fio', 'headset', 'headphone', 'earbud', 'earphone', 'caixa de som', 'soundbar', 'home theater', 'airpods', 'speaker bluetooth']],
+  ['audio', ['fone de ouvido', 'fone bluetooth', 'fone sem fio', ' fone ', 'headset', 'headphone', 'earbud', 'earphone', 'caixa de som', 'soundbar', 'home theater', 'airpods', 'speaker bluetooth', 'galaxy buds', 'redmi buds', 'jbl', 'bose', 'soundcore', ' qcy ', 'wireless earphone', 'tws']],
+
+  // TV — ANTES de hardware (nome de TV costuma ter "processador"/"monitor" que
+  // a regra de hardware capturaria por engano). TV é sempre eletronicos.
+  ['eletronicos', ['smart tv', 'smart-tv', 'smarttv', ' tv ', 'televisão', 'televisao', 'tv led', 'tv qled', 'tv oled', 'tv 4k', 'google tv', 'roku tv']],
 
   // hardware / informática (componentes e periféricos)
   ['hardware', ['notebook', 'laptop', 'ultrabook', 'macbook', 'chromebook', 'ideapad', 'thinkpad', 'inspiron', 'vivobook',
@@ -65,6 +71,14 @@ const RULES = [
 function inferCategory(name = '') {
   // Normaliza: minúsculas + espaços nas bordas pra casar regras com " bota "
   const text = ` ${String(name).toLowerCase()} `;
+
+  // Override de prioridade: nome que COMEÇA com indicador de celular é
+  // smartphone, mesmo que tenha "ssd"/"ram"/"processador" no meio (ML às vezes
+  // enche o título do celular com specs que cairiam em hardware).
+  if (/^\s*(smartphone|celular|iphone|smartphone gamer)\b/i.test(name)) {
+    return 'smartphones';
+  }
+
   for (const [category, keywords] of RULES) {
     if (keywords.some((k) => text.includes(k))) return category;
   }
