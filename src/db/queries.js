@@ -723,10 +723,53 @@ async function findActiveProductByUrl(url) {
   return data;
 }
 
+// ── Mensagens postadas (pra permitir apagar/gerenciar posts depois) ──────────
+async function recordPostedMessage({ messageId, threadId, chatId, productId, kind, caption }) {
+  if (!messageId) return;
+  const { error } = await supabase.from('posted_messages').insert({
+    message_id: messageId,
+    thread_id: threadId || null,
+    chat_id: String(chatId),
+    product_id: productId || null,
+    kind: kind || null,
+    caption: caption ? String(caption).slice(0, 200) : null,
+  });
+  if (error) console.warn('[recordPostedMessage]', error.message);
+}
+
+// Últimas N mensagens postadas (pra /apagar_ultimos)
+async function getRecentPostedMessages(limit = 5) {
+  const { data, error } = await supabase
+    .from('posted_messages')
+    .select('id, message_id, thread_id, chat_id, kind, caption, posted_at')
+    .order('posted_at', { ascending: false })
+    .limit(limit);
+  if (error) { console.warn('[getRecentPostedMessages]', error.message); return []; }
+  return data || [];
+}
+
+// Remove o registro após apagar do Telegram (ou se a msg já não existe)
+async function deletePostedMessageRecord(id) {
+  await supabase.from('posted_messages').delete().eq('id', id);
+}
+
+// Acha registros de uma mensagem específica pelo message_id (todos os threads)
+async function findPostedByMessageId(messageId) {
+  const { data } = await supabase
+    .from('posted_messages')
+    .select('id, message_id, thread_id, chat_id')
+    .eq('message_id', messageId);
+  return data || [];
+}
+
 module.exports = {
   getActiveProducts,
   savePrice,
   getLowestPrice,
+  recordPostedMessage,
+  getRecentPostedMessages,
+  deletePostedMessageRecord,
+  findPostedByMessageId,
   getLowestPriceRecent,
   getPriceContext,
   getOfferIntelligence,

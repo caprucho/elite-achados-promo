@@ -2,7 +2,7 @@ require('dotenv').config();
 const TelegramBot = require('node-telegram-bot-api');
 const axios = require('axios');
 const { nextTip } = require('../utils/tips');
-const { getWatchers } = require('../db/queries');
+const { getWatchers, recordPostedMessage } = require('../db/queries');
 const { topic, topicsForProduct } = require('../utils/topicRouter');
 
 const { TELEGRAM_BOT_TOKEN, TELEGRAM_ADMIN_USER_ID } = process.env;
@@ -216,29 +216,39 @@ const buildShareKeyboard = buildProductButtons;
 
 // Helper: posta uma mensagem (foto ou texto) com suporte a tópico do grupo.
 // Tenta sendPhoto se tiver imagem; faz fallback pra sendMessage se a foto falhar.
-async function postToDest({ threadId, caption, imageUrl, reply_markup, parse_mode = 'MarkdownV2', disable_web_page_preview = false }) {
+// Retorna o objeto-resultado do Telegram (tem .message_id) em caso de sucesso,
+// ou null em falha. Truthy/falsy mantém compatibilidade com os chamadores que
+// só checavam if (ok). O message_id é gravado em posted_messages pra permitir
+// apagar/gerenciar o post depois.
+async function postToDest({ threadId, caption, imageUrl, reply_markup, parse_mode = 'MarkdownV2', disable_web_page_preview = false, kind = null, productId = null }) {
   const opts = { parse_mode, reply_markup };
   if (threadId) opts.message_thread_id = threadId;
+  let res = null;
   try {
     if (imageUrl) {
-      await tgSend('sendPhoto', TELEGRAM_DEST_ID, imageUrl, { caption, ...opts });
+      res = await tgSend('sendPhoto', TELEGRAM_DEST_ID, imageUrl, { caption, ...opts });
     } else {
-      await tgSend('sendMessage', TELEGRAM_DEST_ID, caption, { disable_web_page_preview, ...opts });
+      res = await tgSend('sendMessage', TELEGRAM_DEST_ID, caption, { disable_web_page_preview, ...opts });
     }
-    return true;
   } catch (err) {
     console.error(`[Telegram] post thread=${threadId || 'main'} falhou:`, err.message);
     if (imageUrl) {
       // Fallback: tenta texto puro (foto pode estar quebrada/restrita)
       try {
-        await tgSend('sendMessage', TELEGRAM_DEST_ID, caption, { disable_web_page_preview, ...opts });
-        return true;
+        res = await tgSend('sendMessage', TELEGRAM_DEST_ID, caption, { disable_web_page_preview, ...opts });
       } catch (err2) {
         console.error(`[Telegram] fallback texto thread=${threadId || 'main'} falhou:`, err2.message);
       }
     }
-    return false;
   }
+  if (res && res.message_id) {
+    // best-effort: registrar o post pra poder apagar depois (não bloqueia)
+    recordPostedMessage({
+      messageId: res.message_id, threadId, chatId: TELEGRAM_DEST_ID,
+      productId, kind, caption,
+    }).catch(() => {});
+  }
+  return res;
 }
 
 async function sendPriceAlert({ productId, name, url, store, category, currentPrice, lowestPrice, lastPrice, normalPrice, allTimeLow, score, scoreLabel, rarityCount, rarityLabel, discountPct, imageUrl, priceHistory = [], alertType = 'minimum', isMasc = false, isFem = false }) {
@@ -345,7 +355,7 @@ async function sendPriceAlert({ productId, name, url, store, category, currentPr
 
   let mainSent = false;
   for (const threadId of threads) {
-    const ok = await postToDest({ threadId, caption, imageUrl, reply_markup });
+    const ok = await postToDest({ threadId, caption, imageUrl, reply_markup, kind: `alert_${alertType}`, productId });
     if (ok) {
       mainSent = true;
       console.log(`[Telegram] Alerta enviado (thread ${threadId || 'main'}): ${name} — ${formatPrice(currentPrice)}`);
@@ -425,7 +435,7 @@ async function sendShowcase({ productId, name, url, store, category, price, imag
   const reply_markup = buildProductButtons({ productId, name, url, currentPrice: price, alertType: 'showcase' });
   const threadId = topic('achadinhos') || topic('geral');
 
-  const ok = await postToDest({ threadId, caption, imageUrl, reply_markup });
+  const ok = await postToDest({ threadId, caption, imageUrl, reply_markup, kind: 'showcase', productId });
   if (ok) console.log(`[Telegram] Achadinho enviado (thread ${threadId || 'main'}): ${name} — ${formatPrice(price)}`);
   return ok;
 }
@@ -465,7 +475,7 @@ async function sendCouponDeal({ name, url, price, oldPrice, discountPct, stock, 
   };
 
   const threadId = topic('cupons_kabum') || topic('cupons_geral') || topic('geral');
-  const ok = await postToDest({ threadId, caption, imageUrl: image, reply_markup });
+  const ok = await postToDest({ threadId, caption, imageUrl: image, reply_markup, kind: 'cupom_kabum' });
   if (ok) console.log(`[Telegram] Cupom enviado (thread ${threadId || 'main'}): ${name} — ${coupon}`);
   return ok;
 }
@@ -692,8 +702,9 @@ async function sendMlDeal({ productId, name, url, category, price, originalPrice
   if (threads.size === 0) threads.add(null);
 
   let sent = false;
+  const kind = (coupon && coupon.code) ? 'coupon_manual' : 'ml_deal';
   for (const threadId of threads) {
-    const ok = await postToDest({ threadId, caption, imageUrl, reply_markup });
+    const ok = await postToDest({ threadId, caption, imageUrl, reply_markup, kind, productId });
     if (ok) {
       sent = true;
       console.log(`[Telegram] Oferta ML enviada (thread ${threadId || 'main'}): ${name} — ${formatPrice(price)}`);

@@ -8,6 +8,7 @@ const {
   getUnavailableProducts,
   findActiveProductByUrl, addWatcher, removeWatcher, isWatching,
   getWatchedProducts, countWatchedProducts,
+  getRecentPostedMessages, deletePostedMessageRecord, findPostedByMessageId,
 } = require('./db/queries');
 const { getPrice } = require('./scrapers');
 const { sendAdminMessage, buildShareMessage } = require('./bot/telegram');
@@ -761,6 +762,54 @@ bot.onText(/^\/ofertas_ml(?:\s+(run))?\b/, async (msg, match) => {
   }
 });
 
+// ── ADMIN: apagar posts do bot no grupo ──────────────────────────────────────
+// O bot grava o message_id de cada post (tabela posted_messages). Dois modos:
+//  1) Responder a uma mensagem do bot no grupo com /apagar → apaga aquela.
+//  2) /apagar_ultimos N → apaga os N últimos posts (default 1, máx 10).
+// Requer que o bot seja ADMIN do grupo (permissão de apagar mensagens).
+async function deleteOneMessage(chatId, messageId) {
+  try {
+    await bot.deleteMessage(String(chatId), messageId);
+    return true;
+  } catch (err) {
+    // 'message to delete not found' / 'message can't be deleted' → trata como já-ido
+    console.warn('[apagar] deleteMessage falhou:', err.message);
+    return false;
+  }
+}
+
+bot.onText(/^\/apagar\b/, async (msg) => {
+  if (!isAdmin(msg)) return;
+  const reply_to = msg.reply_to_message;
+  if (!reply_to) {
+    return reply(msg, 'ℹ️ *Como apagar:*\n\n1. No grupo, *responda* à mensagem do bot que quer apagar e mande `/apagar`\n2. Ou use `/apagar_ultimos N` pra apagar os N últimos posts.');
+  }
+  const chatId = msg.chat.id;
+  const messageId = reply_to.message_id;
+  const ok = await deleteOneMessage(chatId, messageId);
+  // limpa o registro (se existir) e a própria mensagem do comando
+  const recs = await findPostedByMessageId(messageId).catch(() => []);
+  for (const r of recs) await deletePostedMessageRecord(r.id).catch(() => {});
+  await deleteOneMessage(chatId, msg.message_id).catch(() => {});
+  if (!ok) await reply(msg, '⚠️ Não consegui apagar (mensagem antiga demais ou o bot não é admin do grupo).');
+});
+
+bot.onText(/^\/apagar_ultimos(?:\s+(\d+))?\b/, async (msg, match) => {
+  if (!isAdmin(msg)) return;
+  const n = Math.min(parseInt(match[1] || '1', 10), 10);
+  const recs = await getRecentPostedMessages(n);
+  if (!recs.length) {
+    return reply(msg, '⚠️ Nenhum post registrado pra apagar. (Só funciona pros posts feitos APÓS esta atualização.)');
+  }
+  let apagados = 0;
+  for (const r of recs) {
+    const ok = await deleteOneMessage(r.chat_id, r.message_id);
+    if (ok) apagados++;
+    await deletePostedMessageRecord(r.id).catch(() => {});
+  }
+  await reply(msg, `🗑 *${apagados}/${recs.length}* post(s) apagado(s).` + (apagados < recs.length ? '\n\n_Alguns podem ser antigos demais ou o bot não é admin do grupo._' : ''));
+});
+
 // ── ADMIN: /test_ml_link ─────────────────────────────────────────────────────
 bot.onText(/^\/test_ml_link\s+(.+)$/, async (msg, match) => {
   if (!isAdmin(msg)) return;
@@ -1291,6 +1340,8 @@ const ADMIN_COMMANDS = [
   { command: 'recomendar',        description: '[admin] Disparar recomendações personalizadas (DM)' },
   { command: 'ofertas_ml',        description: '[admin] Ofertas ML: preview / run' },
   { command: 'cupom',             description: '[admin] Cupons manuais: ver / run' },
+  { command: 'apagar',            description: '[admin] Apagar post (responda à msg do bot)' },
+  { command: 'apagar_ultimos',    description: '[admin] Apagar os N últimos posts' },
   { command: 'sugestoes',         description: '[admin] Ver sugestões pendentes' },
   { command: 'aprovarsugestao',   description: '[admin] Aprovar sugestão pelo ID' },
   { command: 'rejeitarsugestao',  description: '[admin] Rejeitar sugestão pelo ID' },
