@@ -72,36 +72,20 @@ function countPriceChanges(history) {
 
 const sleep = (ms) => new Promise((res) => setTimeout(res, ms));
 
-async function maybeNotifyLongUnavailable(product) {
-  const { id, name, url, store } = product;
-  const streakStart = await getUnavailableStreakStart(id);
-  if (!streakStart) return;
-  const days = (Date.now() - new Date(streakStart).getTime()) / 86400000;
-  if (days < UNAVAILABLE_NOTIFY_DAYS) return;
-  if (await wasUnavailableAlertSent(id)) return;
-
-  // Escapa caracteres que o Markdown legacy do Telegram interpreta (_ * [ `).
-  // Nome/URL de produtos do ML costumam ter '_' e '*' que quebram o parse e
-  // fazem a notificação falhar (ETELEGRAM 400: can't parse entities).
-  const mdEsc = (s) => String(s).replace(/[_*[\]`]/g, '\\$&');
-  await sendAdminMessage([
-    `⚠️ *Produto indisponível há ${Math.floor(days)} dias*`,
-    ``,
-    `📦 *${mdEsc(name)}*`,
-    `🏪 ${mdEsc(store)}`,
-    `🔗 ${mdEsc(url)}`,
-    ``,
-    `Verifique se o link quebrou ou o produto foi removido.`,
-    `Pra desativar: \`/removerproduto ${id}\``,
-  ].join('\n'));
-  await markUnavailableAlertSent(id);
-  console.log(`[Monitor] Notificação admin enviada — ${name} indisponível há ${days.toFixed(1)}d`);
-}
+// (Removido: maybeNotifyLongUnavailable — notificava 1 DM por produto. Agora os
+// indisponíveis vão num digest diário, src/unavailableDigest.js.)
 
 // Retorna: 'ok' (produto disponível), 'fail' (scrape retornou null),
 // 'skip' (em backoff, não foi tentado).
 async function processProduct(product) {
   const { id, name, url, store, category, is_masc: isMasc = false, is_fem: isFem = false } = product;
+
+  // Amazon desativada por decisão do dono (2026-05-29): o Railway é bloqueado
+  // pelo anti-bot da Amazon. Enquanto ENABLE_AMAZON_SCRAPE != true, nem tenta —
+  // não posta, não marca indisponível, não notifica. Reativar com a env.
+  if (store === 'amazon' && process.env.ENABLE_AMAZON_SCRAPE !== 'true') {
+    return 'skip';
+  }
 
   // Backoff: produto já indisponível espera UNAVAILABLE_BACKOFF_HOURS antes de novo scan
   const prevUnavailableCount = await getConsecutiveUnavailableCount(id);
@@ -111,7 +95,6 @@ async function processProduct(product) {
       ? (Date.now() - new Date(lastScanAt).getTime()) / 3600000
       : Infinity;
     if (hoursAgo < UNAVAILABLE_BACKOFF_HOURS) {
-      await maybeNotifyLongUnavailable(product);
       return 'skip';
     }
   }
@@ -126,7 +109,8 @@ async function processProduct(product) {
     } else {
       console.log(`[Monitor] Produto continua indisponível (${newCount}x) — ${name}`);
     }
-    await maybeNotifyLongUnavailable(product);
+    // Notificação individual REMOVIDA — agora vai num digest diário
+    // (src/unavailableDigest.js). Aqui só registra o estado.
     recordProduct(false);
     return 'fail';
   }
@@ -370,6 +354,13 @@ async function main() {
 
   // Agenda resumo diário ao admin (DM com stats das últimas 24h)
   scheduleDailySummary();
+
+  // Agenda digest diário de produtos indisponíveis (1 DM ao admin com a lista
+  // completa, em vez de 1 notificação por produto).
+  if (process.env.ENABLE_UNAVAILABLE_DIGEST !== 'false') {
+    try { require('./unavailableDigest').scheduleUnavailableDigest(); }
+    catch (err) { console.warn('[Monitor] Digest de indisponíveis não iniciado:', err.message); }
+  }
 
   // Agenda digest de "voltou ao estoque" (1x/dia às 15h BRT, consolidado)
   if (process.env.ENABLE_BACK_IN_STOCK_DIGEST !== 'false') {
