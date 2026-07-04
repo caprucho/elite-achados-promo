@@ -1050,6 +1050,70 @@ bot.on('callback_query', async (cb) => {
   await bot.answerCallbackQuery(cb.id, { text: '' }).catch(() => {});
 });
 
+// ── ADMIN: /egt — engajamento (uso do bot pelos usuários) ────────────────────
+bot.onText(/^\/egt\b/, async (msg) => {
+  if (!isAdmin(msg)) return;
+  await reply(msg, '⏳ Calculando engajamento...');
+  try {
+    const ADMIN = String(TELEGRAM_ADMIN_USER_ID || '');
+    const BOT_ORIGINS = ['bulk-import', 'bulk-ofertas-ml', 'auto-ofertas-ml', 'admin-bulk', 'cupom-manual', 'admin-manual'];
+
+    // Membros do grupo (grupo certo via TELEGRAM_GROUP_ID)
+    let members = '?';
+    if (process.env.TELEGRAM_GROUP_ID) {
+      let chatId = process.env.TELEGRAM_GROUP_ID;
+      const asNum = parseInt(chatId, 10);
+      if (!isNaN(asNum) && String(asNum) === chatId) chatId = asNum;
+      const fn = bot.getChatMemberCount || bot.getChatMembersCount;
+      if (fn) { try { members = await fn.call(bot, chatId); } catch {} }
+    }
+
+    // Produtos cadastrados POR usuários (fora admin e fora dos cadastros em lote)
+    const { data: prods } = await supabase
+      .from('products')
+      .select('added_by_telegram_id, added_by_username, created_at')
+      .not('added_by_telegram_id', 'is', null);
+    const userProds = (prods || []).filter((p) =>
+      String(p.added_by_telegram_id) !== ADMIN && !BOT_ORIGINS.includes(p.added_by_username));
+    const cadUsers = new Set(userProds.map((p) => p.added_by_telegram_id));
+
+    // Watchers (clicaram "💎 Monitorar")
+    const { data: watchers } = await supabase.from('product_watchers').select('telegram_id');
+    const watchUsers = new Set((watchers || []).map((w) => String(w.telegram_id)).filter((id) => id !== ADMIN));
+
+    // Indicações e sugestões
+    const { count: refs } = await supabase.from('referrals').select('*', { count: 'exact', head: true });
+    const { count: sugs } = await supabase.from('suggestions').select('*', { count: 'exact', head: true });
+
+    // Usuários únicos que interagiram de algum jeito
+    const ativos = new Set([...cadUsers].map(String).concat([...watchUsers]));
+
+    // últimos cadastros (quem + quando)
+    const ultimos = userProds
+      .sort((a, b) => new Date(b.created_at) - new Date(a.created_at))
+      .slice(0, 5)
+      .map((p) => `• @${p.added_by_username || p.added_by_telegram_id} — ${new Date(p.created_at).toLocaleDateString('pt-BR')}`)
+      .join('\n') || '• _ninguém ainda_';
+
+    await reply(msg, [
+      `📈 *ENGAJAMENTO — ${new Date().toLocaleDateString('pt-BR')}*`,
+      ``,
+      `👥 Membros no grupo: *${members}*`,
+      `🙋 Usuários que já usaram o bot: *${ativos.size}*`,
+      ``,
+      `📦 Produtos cadastrados por usuários: *${userProds.length}* (${cadUsers.size} pessoa/s)`,
+      `💎 Monitorando via botão: *${watchUsers.size}* pessoa/s`,
+      `🤝 Indicações (/convidar): *${refs || 0}*`,
+      `💡 Sugestões (/sugerir): *${sugs || 0}*`,
+      ``,
+      `🕐 *Últimos cadastros:*`,
+      ultimos,
+    ].join('\n'));
+  } catch (err) {
+    await reply(msg, `❌ Erro: ${err.message}`);
+  }
+});
+
 // ── ADMIN: /stats ────────────────────────────────────────────────────────────
 bot.onText(/^\/stats\b/, async (msg) => {
   if (!isAdmin(msg)) return;
@@ -1331,6 +1395,7 @@ const PUBLIC_COMMANDS = [
 const ADMIN_COMMANDS = [
   ...PUBLIC_COMMANDS,
   { command: 'stats',             description: '[admin] Dashboard com estatísticas' },
+  { command: 'egt',               description: '[admin] Engajamento (uso do bot pelos usuários)' },
   { command: 'health',            description: '[admin] Diagnóstico do sistema' },
   { command: 'buscar',            description: '[admin] Buscar produto por nome' },
   { command: 'listarprodutos',    description: '[admin] Listar todos os produtos ativos' },
